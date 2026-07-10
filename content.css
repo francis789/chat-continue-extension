@@ -1,10 +1,14 @@
 #cca-root {
   all: initial;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  position: fixed;
-  z-index: 2147483646;
-  right: 16px;
-  bottom: 16px;
+  font-family: "Segoe UI", system-ui, sans-serif !important;
+  position: fixed !important;
+  z-index: 2147483646 !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  pointer-events: auto !important;
   color-scheme: dark;
 }
 
@@ -24,9 +28,10 @@
   font-size: 20px;
   font-weight: 700;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  display: flex;
+  display: flex !important;
   align-items: center;
   justify-content: center;
+  pointer-events: auto !important;
 }
 
 #cca-fab[data-active="1"] {
@@ -47,25 +52,27 @@
 
 #cca-fab-wrap {
   position: relative;
-  display: inline-flex;
+  display: inline-flex !important;
+  pointer-events: auto !important;
 }
 
 #cca-panel {
-  position: absolute;
-  right: 0;
-  bottom: 60px;
-  width: 320px;
-  background: #0d1117;
-  color: #e6edf3;
-  border: 1px solid #30363d;
+  position: absolute !important;
+  right: 0 !important;
+  bottom: 60px !important;
+  width: 320px !important;
+  background: #0d1117 !important;
+  color: #e6edf3 !important;
+  border: 1px solid #30363d !important;
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   padding: 14px;
-  display: none;
+  display: none !important;
+  pointer-events: auto !important;
 }
 
 #cca-panel[data-open="1"] {
-  display: block;
+  display: block !important;
 }
 
 #cca-panel h2 {

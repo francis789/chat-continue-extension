@@ -1,17 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Chat Continue Auto",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "Quando a IA para de gerar, insere um texto no input e envia — N vezes.",
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting", "activeTab"],
   "host_permissions": [
     "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
+    "https://*.claude.ai/*",
     "https://gemini.google.com/*",
     "https://www.perplexity.ai/*",
     "https://chat.deepseek.com/*",
@@ -31,8 +33,10 @@
     {
       "matches": [
         "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*",
         "https://chat.openai.com/*",
         "https://claude.ai/*",
+        "https://*.claude.ai/*",
         "https://gemini.google.com/*",
         "https://www.perplexity.ai/*",
         "https://chat.deepseek.com/*",
@@ -41,6 +45,12 @@
       "css": ["content.css"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
