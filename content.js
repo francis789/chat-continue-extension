@@ -267,14 +267,19 @@
     return count;
   }
 
-  /** Total de ocorrências do marcador no conteúdo da página (fora do painel). */
+  /**
+   * Total de ocorrências do marcador no conteúdo da página (fora do painel).
+   * Usa o <body> inteiro: em apps como o NotebookLM o chat fica fora do
+   * <main>, o que zerava a contagem. O texto do próprio painel é descontado.
+   */
   function countMarker() {
     const needle = state.marker;
     if (!needle || !needle.trim()) return 0;
-    const root = document.querySelector('main, [role="main"]') || document.body;
-    let count = countIn(root.innerText || '', needle);
+    const body = document.body;
+    if (!body) return 0;
+    let count = countIn(body.innerText || '', needle);
     const panel = document.getElementById('cca-root');
-    if (panel && root.contains(panel)) {
+    if (panel) {
       count -= countIn(panel.innerText || '', needle);
     }
     return Math.max(0, count);
@@ -344,6 +349,8 @@
       'button[aria-label="Enviar mensagem"]',
       'button[aria-label*="Send message" i]',
       'button[aria-label*="Enviar" i]',
+      'button[aria-label="Submit"]',
+      'button[type="submit"][aria-label*="submit" i]',
       'form button[type="submit"]',
     ];
     for (const sel of selectors) {
