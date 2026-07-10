@@ -12,6 +12,12 @@
   const DEFAULTS = {
     text: 'execute o comando',
     times: 4,
+    /** String que identifica texto de resposta da IA (modo contagem). */
+    marker: '=ff=',
+    /** Mínimo de NOVAS ocorrências do marcador antes de enviar. */
+    minNew: 1,
+    /** Máximo TOTAL de ocorrências na página — ao atingir, para (0 = sem limite). */
+    maxTotal: 0,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXT = 'continue';
@@ -37,11 +43,45 @@
     lastReplySig: '',
     stableTicks: 0,
     sawStreaming: false,
+    /** Modo contagem (marcador definido pelo usuário). */
+    marker: DEFAULTS.marker,
+    minNew: DEFAULTS.minNew,
+    maxTotal: DEFAULTS.maxTotal,
+    /** Contagem do marcador no momento do último envio (null = registrar). */
+    markerBaseline: null,
+    /** Maior contagem já vista desde a baseline (imune a DOM virtualizado). */
+    markerLast: 0,
+    /** Ticks consecutivos sem ocorrência nova. */
+    markerStableTicks: 0,
   };
 
   let rootEl = null;
   let statusEl = null;
   let fabEl = null;
+
+  let extVersion = '?';
+  try {
+    extVersion = chrome.runtime.getManifest().version;
+  } catch {
+    // contexto invalidado — segue sem versão
+  }
+
+  /** Log de diagnóstico — abra o console (F12) e filtre por [CCA]. */
+  function dlog(...args) {
+    try {
+      console.log('[CCA]', ...args);
+    } catch {
+      // ignore
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(
+      /[&<>"']/g,
+      (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+    );
+  }
 
   // ─── Detecção por site ───────────────────────────────────────────
 
@@ -90,7 +130,9 @@
       'button[aria-label="Stop Response"]',
       'button[aria-label="Stop response"]',
       'button[aria-label="Parar de gerar"]',
+      'button[aria-label="Parar resposta"]',
       'button[aria-label="Parar"]',
+      'button[aria-label="Interromper resposta"]',
     ];
     for (const sel of selectors) {
       const el = queryAll(sel)[0];
@@ -106,7 +148,10 @@
         t.includes('stop streaming') ||
         t.includes('stop generating') ||
         t.includes('stop response') ||
-        t.includes('parar de gerar')
+        t.includes('parar de gerar') ||
+        t.includes('parar resposta') ||
+        t.includes('parar gera') ||
+        t.includes('interromper')
       ) {
         return btn;
       }
@@ -124,18 +169,34 @@
     return null;
   }
 
-  function hasStreamingIndicator() {
-    const sels = [
-      '.result-streaming',
-      '[data-is-streaming="true"]',
-      '.result-streaming[aria-busy="true"]',
-      '[aria-busy="true"].result-streaming',
-      '[data-testid*="thinking"]',
-      '[data-testid*="reasoning"]',
-      'button[data-testid="stop-button"]',
-    ];
-    for (const sel of sels) {
-      if (document.querySelector(sel)) return true;
+  /** Sinais confiáveis: só existem no DOM enquanto a IA realmente gera. */
+  function hasHardStreamingSignal() {
+    if (findStopButton()) return true;
+    return !!document.querySelector('.result-streaming, [data-is-streaming="true"]');
+  }
+
+  /**
+   * Sinais fracos: blocos de thinking/reasoning ficam no DOM depois que a
+   * resposta termina (Claude/ChatGPT), então sozinhos não provam geração.
+   */
+  function hasSoftStreamingSignal() {
+    if (queryAll('[data-testid*="thinking"], [data-testid*="reasoning"]').length) {
+      return true;
+    }
+    // ChatGPT: logo após nosso envio o send-button some antes do stop aparecer.
+    if (
+      isChatGPT() &&
+      state.phase !== 'idle' &&
+      Date.now() - state.lastSendAt > 600 &&
+      Date.now() - state.lastSendAt < 15000
+    ) {
+      const send = document.querySelector('button[data-testid="send-button"]');
+      // Composer vazio no ChatGPT mostra o botão de voz no lugar do send —
+      // isso é estado idle, não geração.
+      const voice = document.querySelector(
+        'button[data-testid="composer-speech-button"], button[aria-label*="voice" i], button[aria-label*="dictation" i], button[aria-label*="ditar" i]'
+      );
+      if (!send && !voice) return true;
     }
     return false;
   }
@@ -150,19 +211,15 @@
   }
 
   function isGenerating() {
-    if (findStopButton()) return true;
-    if (hasStreamingIndicator()) return true;
-    // ChatGPT: enquanto gera, o send-button some; após nosso envio isso conta.
-    if (
-      state.phase !== 'idle' &&
-      Date.now() - state.lastSendAt > 600 &&
-      Date.now() - state.lastSendAt < 30 * 60 * 1000
-    ) {
-      const send = document.querySelector('button[data-testid="send-button"]');
-      const stop = document.querySelector('button[data-testid="stop-button"]');
-      if (stop) return true;
-      // Sem send e sem stop ainda pode ser "thinking" — trata como gerando se vimos stream ou acabamos de enviar
-      if (!send && state.sawStreaming) return true;
+    if (hasHardStreamingSignal()) return true;
+    // Modo contagem: só sinais confiáveis contam; o resto é decidido pela
+    // contagem de ocorrências do marcador definido pelo usuário.
+    if (markerActive()) return false;
+    if (hasSoftStreamingSignal()) {
+      // Sinal fraco pode ser um bloco de thinking de resposta JÁ concluída
+      // preso no DOM. Se o texto da conversa está parado há ~3s, ignora.
+      if (state.stableTicks >= 8) return false;
+      return true;
     }
     return false;
   }
@@ -174,6 +231,9 @@
       document.querySelectorAll('[data-turn="assistant"]'),
       document.querySelectorAll('section[data-turn="assistant"]'),
       document.querySelectorAll('.font-claude-message'),
+      document.querySelectorAll('.font-claude-response'),
+      document.querySelectorAll('[data-is-streaming]'),
+      document.querySelectorAll('model-response'),
     ];
     for (const list of groups) {
       if (!list.length) continue;
@@ -182,7 +242,48 @@
       const t = (el.innerText || '').trim();
       if (t) return `${t.length}:${t.slice(-80)}`;
     }
+    // Genérico: texto do conteúdo principal (painel fica fora do <main>).
+    const main = document.querySelector('main, [role="main"]');
+    if (main && !main.contains(document.getElementById('cca-root'))) {
+      const t = (main.innerText || '').trim();
+      if (t) return `${t.length}:${t.slice(-80)}`;
+    }
     return '';
+  }
+
+  // ─── Modo contagem (marcador do usuário) ─────────────────────────
+
+  function markerActive() {
+    return !!(state.marker && state.marker.trim()) && state.minNew >= 1;
+  }
+
+  function countIn(text, needle) {
+    let count = 0;
+    let i = 0;
+    while ((i = text.indexOf(needle, i)) !== -1) {
+      count += 1;
+      i += needle.length;
+    }
+    return count;
+  }
+
+  /** Total de ocorrências do marcador no conteúdo da página (fora do painel). */
+  function countMarker() {
+    const needle = state.marker;
+    if (!needle || !needle.trim()) return 0;
+    const root = document.querySelector('main, [role="main"]') || document.body;
+    let count = countIn(root.innerText || '', needle);
+    const panel = document.getElementById('cca-root');
+    if (panel && root.contains(panel)) {
+      count -= countIn(panel.innerText || '', needle);
+    }
+    return Math.max(0, count);
+  }
+
+  function resetMarkerCounters() {
+    state.markerBaseline = null;
+    state.markerLast = 0;
+    state.markerStableTicks = 0;
   }
 
   function findComposer() {
@@ -425,13 +526,16 @@
   async function sendMessage(text) {
     const composer = findComposer();
     if (!composer) {
+      dlog('sendMessage: composer NÃO encontrado');
       setStatus('Não achei o campo de mensagem nesta página.');
       return false;
     }
 
+    dlog('sendMessage: composer =', composer.id || composer.className || composer.tagName);
     setStatus(`Campo achado (<code>${composer.id || composer.tagName}</code>). Inserindo…`);
     const ok = setComposerText(composer, text);
     if (!ok) {
+      dlog('sendMessage: inserção FALHOU no composer');
       setStatus(
         'Achei o campo, mas o site bloqueou a inserção. Clique uma vez no input do chat e tente Iniciar de novo.'
       );
@@ -441,6 +545,7 @@
     await sleep(BEFORE_SEND_MS);
 
     const sendBtn = findSendButton();
+    dlog('sendMessage: inserido OK; sendBtn =', sendBtn ? 'achado' : 'não achado');
     if (sendBtn) {
       sendBtn.click();
       state.lastSendAt = Date.now();
@@ -473,6 +578,9 @@
     state.sawStreaming = false;
     state.stableTicks = 0;
     state.lastReplySig = getLastReplySignature();
+    // Baseline null → o tick registra a contagem ~1,5s após o envio, quando
+    // nossa própria mensagem já entrou no DOM (ela pode conter o marcador).
+    resetMarkerCounters();
   }
 
   async function onGenerationEnded(reason) {
@@ -482,6 +590,7 @@
     // Evita reenvio imediato após o nosso próprio send
     if (Date.now() - state.lastSendAt < 2500) return;
 
+    dlog('onGenerationEnded:', reason, '— enviando após delay');
     state.pendingSend = true;
     state.phase = 'idle'; // trava reentrância até o próximo send
     setStatus(
@@ -501,6 +610,29 @@
       state.sawStreaming = true;
       setStatus('Geração retomou — aguardando parar de novo.');
       return;
+    }
+
+    // Modo contagem: se surgiram ocorrências novas durante a espera, aborta.
+    if (markerActive() && state.markerBaseline !== null) {
+      const c = countMarker();
+      if (state.maxTotal >= 1 && c >= state.maxTotal) {
+        dlog('marcador: máximo total atingido antes do envio', { c, max: state.maxTotal });
+        stop();
+        setStatus(
+          `⚠️ <strong>Limite máximo atingido</strong>: ${c}/${state.maxTotal} ` +
+            `ocorrências de "${escapeHtml(state.marker)}" na página. Execução parada.`
+        );
+        return;
+      }
+      if (c > state.markerLast) {
+        state.markerLast = c;
+        state.markerStableTicks = 0;
+        state.pendingSend = false;
+        state.phase = 'streaming';
+        state.sawStreaming = true;
+        setStatus('Novas ocorrências surgiram durante a espera — aguardando estabilizar.');
+        return;
+      }
     }
 
     const text = state.text;
@@ -526,23 +658,103 @@
     updateFab();
   }
 
-  function tick() {
-    if (!state.armed || state.pendingSend || state.remaining <= 0) return;
-    if (state.phase === 'idle') return;
+  /**
+   * Modo contagem: conta ocorrências do marcador; envia quando o total de
+   * NOVAS ocorrências desde o último envio atingir o mínimo E a contagem
+   * parar de crescer (IA parou de inserir texto de resposta).
+   */
+  function markerTick(elapsed) {
+    const current = countMarker();
 
-    const gen = isGenerating();
-    const elapsed = Date.now() - state.lastSendAt;
-
-    if (gen) {
-      state.sawStreaming = true;
-      state.phase = 'streaming';
-      state.stableTicks = 0;
-      setStatus(`IA gerando… (restam <strong>${state.remaining}</strong>)`);
+    // Limite máximo TOTAL na página: ao atingir, para tudo com aviso.
+    if (state.maxTotal >= 1 && current >= state.maxTotal) {
+      dlog('marcador: máximo total atingido', { current, max: state.maxTotal });
+      stop();
+      setStatus(
+        `⚠️ <strong>Limite máximo atingido</strong>: ${current}/${state.maxTotal} ` +
+          `ocorrências de "${escapeHtml(state.marker)}" na página. Execução parada.`
+      );
       return;
     }
 
-    // Estabilidade do texto da resposta (fallback quando o botão Stop não aparece no DOM)
-    if (elapsed >= 3000) {
+    // Registra a baseline (contagem atual) ~1,5s após o envio.
+    if (state.markerBaseline === null) {
+      if (elapsed >= 1500) {
+        state.markerBaseline = current;
+        state.markerLast = current;
+        state.markerStableTicks = 0;
+        dlog('marcador: baseline =', current);
+        setStatus(
+          `Base: <strong>${current}</strong> ocorrência(s) de "${escapeHtml(state.marker)}". Monitorando novas… (restam <strong>${state.remaining}</strong>)`
+        );
+      }
+      return;
+    }
+
+    if (current > state.markerLast) {
+      state.markerLast = current;
+      state.markerStableTicks = 0;
+      state.sawStreaming = true;
+      state.phase = 'streaming';
+    } else {
+      state.markerStableTicks += 1;
+    }
+
+    const news = state.markerLast - state.markerBaseline;
+    const stable = state.markerStableTicks >= 6; // ~2,4s sem ocorrência nova
+    const gen = hasHardStreamingSignal();
+
+    if (gen) {
+      setStatus(
+        `IA gerando… novas: <strong>${news}/${state.minNew}</strong> (restam <strong>${state.remaining}</strong>)`
+      );
+      return;
+    }
+
+    // 1º envio com chat parado: nada cresceu desde o início e sem geração.
+    const isFirstSend = state.remaining === state.times;
+    if (isFirstSend && news === 0 && state.markerStableTicks >= 12 && elapsed >= 4000) {
+      dlog('marcador: chat parado — 1º envio imediato');
+      void onGenerationEnded('chat parado, 1º envio');
+      return;
+    }
+
+    if (news >= state.minNew && stable && elapsed >= 4000) {
+      dlog('marcador: mínimo atingido e contagem estável', {
+        news,
+        min: state.minNew,
+        stableTicks: state.markerStableTicks,
+      });
+      void onGenerationEnded(`${news}/${state.minNew} novas e estável`);
+      return;
+    }
+
+    setStatus(
+      `Novas ocorrências: <strong>${news}/${state.minNew}</strong>` +
+        (state.maxTotal >= 1 ? ` · total ${current}/${state.maxTotal}` : '') +
+        (news >= state.minNew
+          ? ' · mínimo atingido, aguardando parar de crescer'
+          : '') +
+        ` (restam <strong>${state.remaining}</strong>)`
+    );
+  }
+
+  function tick() {
+    updateCountLine();
+
+    if (!state.armed || state.pendingSend || state.remaining <= 0) return;
+    if (state.phase === 'idle') return;
+
+    const elapsed = Date.now() - state.lastSendAt;
+
+    if (markerActive()) {
+      markerTick(elapsed);
+      return;
+    }
+
+    // Estabilidade do texto ANTES de isGenerating(): ela destrava sinais
+    // fracos presos (blocos de thinking de respostas já concluídas).
+    if (elapsed >= 1500) {
       const sig = getLastReplySignature();
       if (sig && sig === state.lastReplySig) {
         state.stableTicks += 1;
@@ -553,12 +765,22 @@
       }
     }
 
+    const gen = isGenerating();
+
+    if (gen) {
+      state.sawStreaming = true;
+      state.phase = 'streaming';
+      setStatus(`IA gerando… (restam <strong>${state.remaining}</strong>)`);
+      return;
+    }
+
     const sendReady = isSendButtonReady();
     const stableEnough = state.stableTicks >= 5; // ~2s com poll 400ms
     const finishedByStop =
       state.sawStreaming && state.phase === 'streaming' && !gen && elapsed >= 2500;
-    const finishedByStable =
-      state.sawStreaming && stableEnough && elapsed >= 4000 && (sendReady || !isChatGPT());
+    // Não exige sendReady: ChatGPT com composer vazio mostra o botão de voz,
+    // então o send-button não existe mesmo com a IA parada.
+    const finishedByStable = state.sawStreaming && stableEnough && elapsed >= 4000;
     const finishedBySendBack =
       state.sawStreaming &&
       sendReady &&
@@ -567,10 +789,15 @@
       state.phase === 'streaming';
 
     if (finishedByStop || finishedBySendBack) {
+      dlog('fim detectado:', finishedByStop ? 'stop sumiu' : 'send voltou', {
+        elapsed,
+        stableTicks: state.stableTicks,
+      });
       void onGenerationEnded(finishedByStop ? 'stop sumiu' : 'send voltou');
       return;
     }
     if (finishedByStable) {
+      dlog('fim detectado: texto estável', { elapsed, stableTicks: state.stableTicks });
       void onGenerationEnded('texto estável');
       return;
     }
@@ -593,6 +820,27 @@
     if (statusEl) statusEl.innerHTML = html;
   }
 
+  /** Linha de contagem sempre visível no painel — segue ativa após concluir. */
+  function updateCountLine() {
+    if (!rootEl) return;
+    const el = rootEl.querySelector('#cca-count');
+    if (!el) return;
+    if (!markerActive()) {
+      el.style.display = 'none';
+      return;
+    }
+    // Painel fechado: não recalcula (countMarker força layout da página).
+    if (!state.panelOpen) return;
+    const total = countMarker();
+    let txt = `"${state.marker}" na página: ${total}`;
+    if (state.maxTotal >= 1) txt += ` / máx ${state.maxTotal}`;
+    if (state.armed && state.markerBaseline !== null) {
+      txt += ` · novas: ${Math.max(0, state.markerLast - state.markerBaseline)}`;
+    }
+    el.style.display = '';
+    el.textContent = txt;
+  }
+
   function updateFab() {
     if (!fabEl) return;
     fabEl.dataset.active = state.armed ? '1' : '0';
@@ -604,11 +852,23 @@
   function persistUiFields() {
     const textEl = rootEl?.querySelector('#cca-text');
     const timesEl = rootEl?.querySelector('#cca-times');
+    const markerEl = rootEl?.querySelector('#cca-marker');
+    const minEl = rootEl?.querySelector('#cca-min');
+    const maxEl = rootEl?.querySelector('#cca-max');
     if (textEl) state.text = textEl.value;
     if (timesEl) state.times = Math.max(1, parseInt(timesEl.value, 10) || 1);
+    if (markerEl) state.marker = markerEl.value;
+    if (minEl) state.minNew = Math.max(1, parseInt(minEl.value, 10) || 1);
+    if (maxEl) state.maxTotal = Math.max(0, parseInt(maxEl.value, 10) || 0);
     try {
       chrome.storage.local.set({
-        [STORAGE_KEY]: { text: state.text, times: state.times },
+        [STORAGE_KEY]: {
+          text: state.text,
+          times: state.times,
+          marker: state.marker,
+          minNew: state.minNew,
+          maxTotal: state.maxTotal,
+        },
       });
     } catch {
       // storage indisponível
@@ -653,7 +913,19 @@
     state.sawStreaming = false;
     updateFab();
 
-    if (isGenerating()) {
+    if (markerActive()) {
+      // Modo contagem: registra a base e monitora novas ocorrências;
+      // o 1º envio sai quando a contagem estabilizar (ou logo, se parado).
+      const gen = isGenerating();
+      state.phase = gen ? 'streaming' : 'watch';
+      state.sawStreaming = gen;
+      state.lastSendAt = Date.now() - 5000;
+      state.lastReplySig = getLastReplySignature();
+      resetMarkerCounters();
+      setStatus(
+        `Ativo (modo contagem de "${escapeHtml(state.marker)}"). Registrando base… (restam <strong>${n}</strong>)`
+      );
+    } else if (isGenerating()) {
       state.phase = 'streaming';
       state.sawStreaming = true;
       state.lastSendAt = Date.now() - 5000; // permite disparar ao terminar a resposta atual
@@ -704,23 +976,34 @@
     rootEl.id = 'cca-root';
     rootEl.innerHTML = `
       <div id="cca-panel" data-open="0">
-        <h2>Chat Continue Auto</h2>
+        <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
         <label for="cca-text">Texto a inserir após a IA terminar</label>
         <textarea id="cca-text" spellcheck="false"></textarea>
+        <label for="cca-marker">String de resposta da IA (modo contagem)</label>
+        <input id="cca-marker" type="text" spellcheck="false"
+          placeholder='ex.: uma string que aparece nas respostas' />
         <div id="cca-row">
           <div>
             <label for="cca-times">Quantas vezes</label>
             <input id="cca-times" type="number" min="1" max="99" step="1" />
           </div>
+          <div>
+            <label for="cca-min">Mín. novas ocorrências</label>
+            <input id="cca-min" type="number" min="1" max="999" step="1" />
+          </div>
         </div>
+        <label for="cca-max">Máx. total da string na página (0 = sem limite)</label>
+        <input id="cca-max" type="number" min="0" max="9999" step="1" />
         <div id="cca-status">Configure e clique em Iniciar.</div>
+        <div id="cca-count"></div>
         <div id="cca-actions">
           <button type="button" id="cca-start">Iniciar</button>
           <button type="button" id="cca-stop">Parar</button>
         </div>
         <p id="cca-hint">
-          Com a IA idle, o 1º envio é imediato; os demais saem cada vez que ela
-          terminar uma resposta. Clique no ícone flutuante (↻) ou no da extensão.
+          Com a string de resposta preenchida, o envio só ocorre quando surgirem
+          pelo menos N novas ocorrências dela na página E a contagem parar de
+          crescer. Deixe vazia para usar a detecção automática.
         </p>
       </div>
       <div id="cca-fab-wrap">
@@ -733,9 +1016,15 @@
     fabEl = rootEl.querySelector('#cca-fab');
     const textEl = rootEl.querySelector('#cca-text');
     const timesEl = rootEl.querySelector('#cca-times');
+    const markerEl = rootEl.querySelector('#cca-marker');
+    const minEl = rootEl.querySelector('#cca-min');
+    const maxEl = rootEl.querySelector('#cca-max');
 
     textEl.value = state.text;
     timesEl.value = String(state.times);
+    markerEl.value = state.marker;
+    minEl.value = String(state.minNew);
+    maxEl.value = String(state.maxTotal);
 
     fabEl.addEventListener('click', (e) => {
       e.preventDefault();
@@ -744,10 +1033,10 @@
     });
     rootEl.querySelector('#cca-start').addEventListener('click', start);
     rootEl.querySelector('#cca-stop').addEventListener('click', stop);
-    textEl.addEventListener('input', persistUiFields);
-    textEl.addEventListener('change', persistUiFields);
-    timesEl.addEventListener('input', persistUiFields);
-    timesEl.addEventListener('change', persistUiFields);
+    for (const el of [textEl, timesEl, markerEl, minEl, maxEl]) {
+      el.addEventListener('input', persistUiFields);
+      el.addEventListener('change', persistUiFields);
+    }
   }
 
   function loadSettings(cb) {
@@ -759,6 +1048,12 @@
         if (saved && saved !== LEGACY_DEFAULT_TEXT) state.text = saved;
         else state.text = DEFAULTS.text;
         state.times = Number.isFinite(s.times) && s.times >= 1 ? s.times : DEFAULTS.times;
+        state.marker =
+          typeof s.marker === 'string' && s.marker.trim() ? s.marker : DEFAULTS.marker;
+        state.minNew =
+          Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
+        state.maxTotal =
+          Number.isFinite(s.maxTotal) && s.maxTotal >= 0 ? s.maxTotal : DEFAULTS.maxTotal;
         cb();
       });
     } catch {

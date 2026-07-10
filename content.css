@@ -90,6 +90,7 @@
 }
 
 #cca-panel textarea,
+#cca-panel input[type="text"],
 #cca-panel input[type="number"] {
   width: 100%;
   background: #161b22;
@@ -108,8 +109,13 @@
 }
 
 #cca-panel textarea:focus,
+#cca-panel input[type="text"]:focus,
 #cca-panel input[type="number"]:focus {
   border-color: #1f6feb;
+}
+
+#cca-panel input[type="text"]::placeholder {
+  color: #6e7681;
 }
 
 #cca-row {
@@ -137,6 +143,17 @@
 #cca-status strong {
   color: #e6edf3;
   font-weight: 600;
+}
+
+#cca-count {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #161b22;
+  border: 1px dashed #30363d;
+  font-size: 11px;
+  color: #8b949e;
+  line-height: 1.4;
 }
 
 #cca-actions {
