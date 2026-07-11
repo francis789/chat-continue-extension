@@ -53,6 +53,12 @@
     markerLast: 0,
     /** Ticks consecutivos sem ocorrência nova. */
     markerStableTicks: 0,
+    /** Temporizador: timestamp de início (0 = nunca iniciado). */
+    timerStart: 0,
+    /** Temporizador: timestamp de parada (válido só com timerRunning=false). */
+    timerStop: 0,
+    /** Temporizador em contagem. */
+    timerRunning: false,
   };
 
   let rootEl = null;
@@ -650,6 +656,7 @@
       if (state.remaining <= 0) {
         state.armed = false;
         state.phase = 'idle';
+        stopTimer();
         setStatus('Concluído. Todas as inserções foram enviadas.');
       } else {
         armWatchAfterSend();
@@ -748,6 +755,7 @@
 
   function tick() {
     updateCountLine();
+    updateTimerLine();
 
     if (!state.armed || state.pendingSend || state.remaining <= 0) return;
     if (state.phase === 'idle') return;
@@ -827,6 +835,69 @@
     if (statusEl) statusEl.innerHTML = html;
   }
 
+  // ─── Temporizador ────────────────────────────────────────────────
+
+  /** Zera e inicia a contagem (chamado no Iniciar). */
+  function startTimer() {
+    state.timerStart = Date.now();
+    state.timerStop = 0;
+    state.timerRunning = true;
+    updateTimerLine();
+  }
+
+  /** Congela a contagem no valor atual (chamado ao concluir/parar). */
+  function stopTimer() {
+    if (!state.timerRunning) return;
+    state.timerStop = Date.now();
+    state.timerRunning = false;
+    updateTimerLine();
+  }
+
+  /** ms → "mm:ss" ou "h:mm:ss". */
+  function formatClock(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
+  /**
+   * Linha do temporizador: tempo total (ao vivo enquanto roda) e tempo médio
+   * por string = tempo total ÷ total de ocorrências da string na página.
+   */
+  function updateTimerLine() {
+    if (!rootEl) return;
+    const el = rootEl.querySelector('#cca-timer');
+    if (!el) return;
+    if (!state.timerStart) {
+      el.style.display = 'none';
+      return;
+    }
+
+    const end = state.timerRunning ? Date.now() : state.timerStop;
+    const elapsed = Math.max(0, end - state.timerStart);
+    let html = `⏱ Tempo: <strong>${formatClock(elapsed)}</strong>`;
+    html += state.timerRunning ? '' : ' · concluído';
+
+    // Média por string. countMarker() força layout da página, então só
+    // recalcula com o painel aberto (mesma regra da linha de contagem).
+    if (state.panelOpen) {
+      // "Total de strings na página": ocorrências do marcador quando em modo
+      // contagem; senão, número de inserções já enviadas.
+      const strings = markerActive() ? countMarker() : state.times - state.remaining;
+      if (strings >= 1) {
+        const avgSec = elapsed / strings / 1000;
+        html += ` · média/string: <strong>${avgSec.toFixed(1)}s</strong>`;
+      }
+    }
+
+    el.style.display = '';
+    el.innerHTML = html;
+  }
+
   /** Linha de contagem sempre visível no painel — segue ativa após concluir. */
   function updateCountLine() {
     if (!rootEl) return;
@@ -891,6 +962,7 @@
       if (state.remaining <= 0) {
         state.armed = false;
         state.phase = 'idle';
+        stopTimer();
         setStatus('Concluído. Todas as inserções foram enviadas.');
       } else {
         armWatchAfterSend();
@@ -899,6 +971,7 @@
         );
       }
     } else {
+      stopTimer();
       setStatus('Falha ao enviar. Confira o campo de mensagem do chat e tente de novo.');
       state.armed = false;
       state.remaining = 0;
@@ -918,6 +991,7 @@
     state.pendingSend = false;
     state.stableTicks = 0;
     state.sawStreaming = false;
+    startTimer();
     updateFab();
 
     if (markerActive()) {
@@ -951,6 +1025,7 @@
     state.pendingSend = false;
     state.phase = 'idle';
     state.sawStreaming = false;
+    stopTimer();
     setStatus('Parado.');
     updateFab();
   }
@@ -1003,6 +1078,7 @@
         <input id="cca-max" type="number" min="0" max="9999" step="1" />
         <div id="cca-status">Configure e clique em Iniciar.</div>
         <div id="cca-count"></div>
+        <div id="cca-timer" style="display:none"></div>
         <div id="cca-actions">
           <button type="button" id="cca-start">Iniciar</button>
           <button type="button" id="cca-stop">Parar</button>
