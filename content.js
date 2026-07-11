@@ -53,6 +53,11 @@
     markerLast: 0,
     /** Ticks consecutivos sem ocorrência nova. */
     markerStableTicks: 0,
+    /**
+     * Última inserção já enviada; ainda aguardando a IA terminar de responder
+     * (e atingir a ocorrência mínima da string) antes de encerrar de vez.
+     */
+    finishing: false,
     /** Temporizador: timestamp de início (0 = nunca iniciado). */
     timerStart: 0,
     /** Temporizador: timestamp de parada (válido só com timerRunning=false). */
@@ -597,17 +602,57 @@
   }
 
   async function onGenerationEnded(reason) {
-    if (!state.armed || state.remaining <= 0 || state.pendingSend) return;
+    if (!state.armed || state.pendingSend) return;
     if (state.phase === 'idle') return;
 
-    // Evita reenvio imediato após o nosso próprio send
+    // Evita reagir imediatamente após o nosso próprio send
     if (Date.now() - state.lastSendAt < 2500) return;
+
+    // Modo finalização: a última inserção já foi enviada. Ao detectar que a IA
+    // terminou de responder a ela, encerra (para timer/contagens) sem reenviar.
+    if (state.finishing) {
+      dlog('onGenerationEnded (finalizando):', reason, '— confirmando fim');
+      state.pendingSend = true;
+      state.phase = 'idle';
+      setStatus(`IA finalizando a última resposta (${reason})… confirmando.`);
+
+      await sleep(AFTER_IDLE_MS);
+
+      if (!state.armed) {
+        state.pendingSend = false;
+        return;
+      }
+      if (isGenerating()) {
+        state.pendingSend = false;
+        state.phase = 'streaming';
+        state.sawStreaming = true;
+        setStatus('Geração retomou — aguardando parar de novo.');
+        return;
+      }
+      // Modo contagem: novas ocorrências durante a espera → segue aguardando.
+      if (markerActive() && state.markerBaseline !== null) {
+        const c = countMarker();
+        if (c > state.markerLast) {
+          state.markerLast = c;
+          state.markerStableTicks = 0;
+          state.pendingSend = false;
+          state.phase = 'streaming';
+          state.sawStreaming = true;
+          setStatus('Novas ocorrências surgiram — aguardando estabilizar.');
+          return;
+        }
+      }
+      finishRun(reason);
+      return;
+    }
+
+    if (state.remaining <= 0) return;
 
     dlog('onGenerationEnded:', reason, '— enviando após delay');
     state.pendingSend = true;
     state.phase = 'idle'; // trava reentrância até o próximo send
     setStatus(
-      `IA parou (${reason}). Enviando em ${AFTER_IDLE_MS / 1000}s… (restam <strong>${state.remaining}</strong>)`
+      `IA parou (${reason}). Enviando em ${AFTER_IDLE_MS / 1000}s… (${restHtml()})`
     );
 
     await sleep(AFTER_IDLE_MS);
@@ -654,19 +699,23 @@
       state.remaining -= 1;
       persistUiFields();
       if (state.remaining <= 0) {
-        state.armed = false;
-        state.phase = 'idle';
-        stopTimer();
-        setStatus('Concluído. Todas as inserções foram enviadas.');
+        // Última inserção enviada: não encerra ainda. Aguarda a IA terminar
+        // esta resposta (e atingir a ocorrência mínima da string), como se
+        // ainda houvesse uma inserção pela frente. O timer segue rodando.
+        state.finishing = true;
+        armWatchAfterSend();
+        setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
       } else {
         armWatchAfterSend();
         setStatus(
-          `Enviado. Aguardando próxima resposta… (restam <strong>${state.remaining}</strong>)`
+          `Enviado. Aguardando próxima resposta… (${restHtml()})`
         );
       }
     } else {
       state.armed = false;
+      state.finishing = false;
       state.phase = 'idle';
+      stopTimer();
     }
     state.pendingSend = false;
     updateFab();
@@ -699,7 +748,7 @@
         state.markerStableTicks = 0;
         dlog('marcador: baseline =', current);
         setStatus(
-          `Base: <strong>${current}</strong> ocorrência(s) de "${escapeHtml(state.marker)}". Monitorando novas… (restam <strong>${state.remaining}</strong>)`
+          `Base: <strong>${current}</strong> ocorrência(s) de "${escapeHtml(state.marker)}". Monitorando novas… (${restHtml()})`
         );
       }
       return;
@@ -720,7 +769,7 @@
 
     if (gen) {
       setStatus(
-        `IA gerando… novas: <strong>${news}/${state.minNew}</strong> (restam <strong>${state.remaining}</strong>)`
+        `IA gerando… novas: <strong>${news}/${state.minNew}</strong> (${restHtml()})`
       );
       return;
     }
@@ -749,7 +798,7 @@
         (news >= state.minNew
           ? ' · mínimo atingido, aguardando parar de crescer'
           : '') +
-        ` (restam <strong>${state.remaining}</strong>)`
+        ` (${restHtml()})`
     );
   }
 
@@ -757,7 +806,8 @@
     updateCountLine();
     updateTimerLine();
 
-    if (!state.armed || state.pendingSend || state.remaining <= 0) return;
+    if (!state.armed || state.pendingSend) return;
+    if (!state.finishing && state.remaining <= 0) return;
     if (state.phase === 'idle') return;
 
     const elapsed = Date.now() - state.lastSendAt;
@@ -785,7 +835,7 @@
     if (gen) {
       state.sawStreaming = true;
       state.phase = 'streaming';
-      setStatus(`IA gerando… (restam <strong>${state.remaining}</strong>)`);
+      setStatus(`IA gerando… (${restHtml()})`);
       return;
     }
 
@@ -819,12 +869,12 @@
 
     if (state.phase === 'watch') {
       setStatus(
-        `Aguardando a IA gerar/terminar… (restam <strong>${state.remaining}</strong>)` +
+        `Aguardando a IA gerar/terminar… (${restHtml()})` +
           (state.sawStreaming ? ' · stream visto' : '')
       );
     } else if (state.phase === 'streaming' && !gen) {
       setStatus(
-        `Confirmando fim da resposta… (${state.stableTicks}/5) · restam <strong>${state.remaining}</strong>`
+        `Confirmando fim da resposta… (${state.stableTicks}/5) · ${restHtml()}`
       );
     }
   }
@@ -833,6 +883,24 @@
 
   function setStatus(html) {
     if (statusEl) statusEl.innerHTML = html;
+  }
+
+  /** Sufixo de status: "restam N" ou, na última resposta, "última resposta". */
+  function restHtml() {
+    return state.finishing
+      ? '<strong>última resposta</strong>'
+      : `restam <strong>${state.remaining}</strong>`;
+  }
+
+  /** Encerra a execução após a IA terminar a resposta da última inserção. */
+  function finishRun(reason) {
+    state.armed = false;
+    state.finishing = false;
+    state.phase = 'idle';
+    state.pendingSend = false;
+    stopTimer();
+    updateFab();
+    setStatus(`Concluído. IA terminou a última resposta (${reason}).`);
   }
 
   // ─── Temporizador ────────────────────────────────────────────────
@@ -923,7 +991,9 @@
     if (!fabEl) return;
     fabEl.dataset.active = state.armed ? '1' : '0';
     fabEl.title = state.armed
-      ? `Ativo — restam ${state.remaining}`
+      ? state.finishing
+        ? 'Ativo — aguardando última resposta'
+        : `Ativo — restam ${state.remaining}`
       : 'Chat Continue Auto';
   }
 
@@ -960,20 +1030,22 @@
     if (sent) {
       state.remaining -= 1;
       if (state.remaining <= 0) {
-        state.armed = false;
-        state.phase = 'idle';
-        stopTimer();
-        setStatus('Concluído. Todas as inserções foram enviadas.');
+        // Última inserção enviada: aguarda a IA terminar esta resposta antes
+        // de encerrar (timer e contagens seguem rodando).
+        state.finishing = true;
+        armWatchAfterSend();
+        setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
       } else {
         armWatchAfterSend();
         setStatus(
-          `Enviado. Aguardando a IA terminar… (restam <strong>${state.remaining}</strong>)`
+          `Enviado. Aguardando a IA terminar… (${restHtml()})`
         );
       }
     } else {
       stopTimer();
       setStatus('Falha ao enviar. Confira o campo de mensagem do chat e tente de novo.');
       state.armed = false;
+      state.finishing = false;
       state.remaining = 0;
       state.phase = 'idle';
     }
@@ -988,6 +1060,7 @@
     state.times = n;
     state.remaining = n;
     state.armed = true;
+    state.finishing = false;
     state.pendingSend = false;
     state.stableTicks = 0;
     state.sawStreaming = false;
@@ -1021,6 +1094,7 @@
 
   function stop() {
     state.armed = false;
+    state.finishing = false;
     state.remaining = 0;
     state.pendingSend = false;
     state.phase = 'idle';
