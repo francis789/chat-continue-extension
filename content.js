@@ -18,6 +18,8 @@
     minNew: 1,
     /** Máximo TOTAL de ocorrências na página — ao atingir, para (0 = sem limite). */
     maxTotal: 0,
+    /** Texto que, ao surgir na conversa, encerra as inserções. */
+    stopText: 'COMANDO FINALIZADO',
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXT = 'continue';
@@ -47,6 +49,10 @@
     marker: DEFAULTS.marker,
     minNew: DEFAULTS.minNew,
     maxTotal: DEFAULTS.maxTotal,
+    /** Texto de parada: ao surgir na conversa, não insere mais. */
+    stopText: DEFAULTS.stopText,
+    /** Contagem do texto de parada no Iniciar (null = ainda não registrada). */
+    stopTextBaseline: null,
     /** Contagem do marcador no momento do último envio (null = registrar). */
     markerBaseline: null,
     /** Maior contagem já vista desde a baseline (imune a DOM virtualizado). */
@@ -300,6 +306,53 @@
     state.markerBaseline = null;
     state.markerLast = 0;
     state.markerStableTicks = 0;
+  }
+
+  /** Texto de parada ativo (não vazio). */
+  function stopTextActive() {
+    return !!(state.stopText && state.stopText.trim());
+  }
+
+  /**
+   * Total de ocorrências do texto de parada no conteúdo da página
+   * (fora do painel da extensão).
+   */
+  function countStopText() {
+    const needle = state.stopText;
+    if (!needle || !needle.trim()) return 0;
+    const body = document.body;
+    if (!body) return 0;
+    let count = countIn(body.innerText || '', needle);
+    const panel = document.getElementById('cca-root');
+    if (panel) {
+      count -= countIn(panel.innerText || '', needle);
+    }
+    return Math.max(0, count);
+  }
+
+  /**
+   * Se o texto de parada surgiu na conversa desde o Iniciar, encerra as
+   * inserções e retorna true. Caso contrário, false.
+   */
+  function checkStopTextAndHalt() {
+    if (!stopTextActive() || !state.armed) return false;
+    const current = countStopText();
+    if (state.stopTextBaseline === null) {
+      state.stopTextBaseline = current;
+      return false;
+    }
+    if (current <= state.stopTextBaseline) return false;
+    dlog('texto de parada detectado', {
+      text: state.stopText,
+      baseline: state.stopTextBaseline,
+      current,
+    });
+    stop();
+    setStatus(
+      `🛑 <strong>Texto de parada encontrado</strong>: "${escapeHtml(state.stopText)}". ` +
+        `Inserções encerradas.`
+    );
+    return true;
   }
 
   function findComposer() {
@@ -608,6 +661,8 @@
     // Evita reagir imediatamente após o nosso próprio send
     if (Date.now() - state.lastSendAt < 2500) return;
 
+    if (checkStopTextAndHalt()) return;
+
     // Modo finalização: a última inserção já foi enviada. Ao detectar que a IA
     // terminou de responder a ela, encerra (para timer/contagens) sem reenviar.
     if (state.finishing) {
@@ -658,6 +713,11 @@
     await sleep(AFTER_IDLE_MS);
 
     if (!state.armed || state.remaining <= 0) {
+      state.pendingSend = false;
+      return;
+    }
+
+    if (checkStopTextAndHalt()) {
       state.pendingSend = false;
       return;
     }
@@ -810,6 +870,8 @@
     if (!state.finishing && state.remaining <= 0) return;
     if (state.phase === 'idle') return;
 
+    if (checkStopTextAndHalt()) return;
+
     const elapsed = Date.now() - state.lastSendAt;
 
     if (markerActive()) {
@@ -898,6 +960,7 @@
     state.finishing = false;
     state.phase = 'idle';
     state.pendingSend = false;
+    state.stopTextBaseline = null;
     stopTimer();
     updateFab();
     setStatus(`Concluído. IA terminou a última resposta (${reason}).`);
@@ -1003,11 +1066,13 @@
     const markerEl = rootEl?.querySelector('#cca-marker');
     const minEl = rootEl?.querySelector('#cca-min');
     const maxEl = rootEl?.querySelector('#cca-max');
+    const stopEl = rootEl?.querySelector('#cca-stop-text');
     if (textEl) state.text = textEl.value;
     if (timesEl) state.times = Math.max(1, parseInt(timesEl.value, 10) || 1);
     if (markerEl) state.marker = markerEl.value;
     if (minEl) state.minNew = Math.max(1, parseInt(minEl.value, 10) || 1);
     if (maxEl) state.maxTotal = Math.max(0, parseInt(maxEl.value, 10) || 0);
+    if (stopEl) state.stopText = stopEl.value;
     try {
       chrome.storage.local.set({
         [STORAGE_KEY]: {
@@ -1016,6 +1081,7 @@
           marker: state.marker,
           minNew: state.minNew,
           maxTotal: state.maxTotal,
+          stopText: state.stopText,
         },
       });
     } catch {
@@ -1064,6 +1130,7 @@
     state.pendingSend = false;
     state.stableTicks = 0;
     state.sawStreaming = false;
+    state.stopTextBaseline = stopTextActive() ? countStopText() : null;
     startTimer();
     updateFab();
 
@@ -1099,6 +1166,7 @@
     state.pendingSend = false;
     state.phase = 'idle';
     state.sawStreaming = false;
+    state.stopTextBaseline = null;
     stopTimer();
     setStatus('Parado.');
     updateFab();
@@ -1150,6 +1218,9 @@
         </div>
         <label for="cca-max">Máx. total da string na página (0 = sem limite)</label>
         <input id="cca-max" type="number" min="0" max="9999" step="1" />
+        <label for="cca-stop-text">Texto de parada (encerra ao surgir na conversa)</label>
+        <input id="cca-stop-text" type="text" spellcheck="false"
+          placeholder="ex.: COMANDO FINALIZADO" />
         <div id="cca-status">Configure e clique em Iniciar.</div>
         <div id="cca-count"></div>
         <div id="cca-timer" style="display:none"></div>
@@ -1160,7 +1231,8 @@
         <p id="cca-hint">
           Com a string de resposta preenchida, o envio só ocorre quando surgirem
           pelo menos N novas ocorrências dela na página E a contagem parar de
-          crescer. Deixe vazia para usar a detecção automática.
+          crescer. Deixe vazia para usar a detecção automática. Se o texto de
+          parada surgir na conversa, as inserções são encerradas imediatamente.
         </p>
       </div>
       <div id="cca-fab-wrap">
@@ -1176,12 +1248,14 @@
     const markerEl = rootEl.querySelector('#cca-marker');
     const minEl = rootEl.querySelector('#cca-min');
     const maxEl = rootEl.querySelector('#cca-max');
+    const stopEl = rootEl.querySelector('#cca-stop-text');
 
     textEl.value = state.text;
     timesEl.value = String(state.times);
     markerEl.value = state.marker;
     minEl.value = String(state.minNew);
     maxEl.value = String(state.maxTotal);
+    stopEl.value = state.stopText;
 
     fabEl.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1190,7 +1264,7 @@
     });
     rootEl.querySelector('#cca-start').addEventListener('click', start);
     rootEl.querySelector('#cca-stop').addEventListener('click', stop);
-    for (const el of [textEl, timesEl, markerEl, minEl, maxEl]) {
+    for (const el of [textEl, timesEl, markerEl, minEl, maxEl, stopEl]) {
       el.addEventListener('input', persistUiFields);
       el.addEventListener('change', persistUiFields);
     }
@@ -1211,6 +1285,8 @@
           Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
         state.maxTotal =
           Number.isFinite(s.maxTotal) && s.maxTotal >= 0 ? s.maxTotal : DEFAULTS.maxTotal;
+        state.stopText =
+          typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
         cb();
       });
     } catch {
