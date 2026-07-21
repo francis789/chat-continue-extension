@@ -30,6 +30,14 @@
   const BEFORE_SEND_MS = 250;
   /** Polling de estado gerando/idle. */
   const POLL_MS = 400;
+  /** Tempo de parede sem mudança para considerar texto/marcador estável. */
+  const STABLE_MS = 2400;
+  /** Estabilidade mais longa no 1º envio (chat parado). */
+  const FIRST_SEND_STABLE_MS = 4800;
+  /** Intervalo mínimo entre tentativas de envio após falha. */
+  const SEND_RETRY_MS = 2000;
+  /** Tentativas de inserção no composer por envio. */
+  const INSERT_ATTEMPTS = 5;
 
   const state = {
     armed: false,
@@ -40,10 +48,14 @@
     phase: 'idle',
     pendingSend: false,
     lastSendAt: 0,
+    /** Última tentativa de envio (sucesso ou falha) — para backoff. */
+    lastSendAttemptAt: 0,
     panelOpen: false,
     /** Assinatura da última resposta (tamanho) para detectar estabilização. */
     lastReplySig: '',
     stableTicks: 0,
+    /** Timestamp em que a assinatura da resposta passou a ficar igual (0 = mudou). */
+    replyStableSince: 0,
     sawStreaming: false,
     /** Modo contagem (marcador definido pelo usuário). */
     marker: DEFAULTS.marker,
@@ -57,8 +69,10 @@
     markerBaseline: null,
     /** Maior contagem já vista desde a baseline (imune a DOM virtualizado). */
     markerLast: 0,
-    /** Ticks consecutivos sem ocorrência nova. */
+    /** Ticks consecutivos sem ocorrência nova (fallback; preferir wall-clock). */
     markerStableTicks: 0,
+    /** Timestamp em que a contagem do marcador parou de crescer (0 = cresceu). */
+    markerStableSince: 0,
     /**
      * Última inserção já enviada; ainda aguardando a IA terminar de responder
      * (e atingir a ocorrência mínima da string) antes de encerrar de vez.
@@ -75,6 +89,9 @@
   let rootEl = null;
   let statusEl = null;
   let fabEl = null;
+  /** Porta longa com o SW enquanto armado (evita throttle de aba em background). */
+  let armedPort = null;
+  let armedPortRetryTimer = null;
 
   let extVersion = '?';
   try {
@@ -235,10 +252,26 @@
     if (hasSoftStreamingSignal()) {
       // Sinal fraco pode ser um bloco de thinking de resposta JÁ concluída
       // preso no DOM. Se o texto da conversa está parado há ~3s, ignora.
-      if (state.stableTicks >= 8) return false;
+      if (replyStableFor(3200) || state.stableTicks >= 8) return false;
       return true;
     }
     return false;
+  }
+
+  function replyStableFor(ms) {
+    return state.replyStableSince > 0 && Date.now() - state.replyStableSince >= ms;
+  }
+
+  function markerStableFor(ms) {
+    return state.markerStableSince > 0 && Date.now() - state.markerStableSince >= ms;
+  }
+
+  function pageLikelyBackgrounded() {
+    try {
+      return document.hidden || document.visibilityState === 'hidden';
+    } catch {
+      return false;
+    }
   }
 
   /** Texto da última bolha do assistente — para detectar quando parou de crescer. */
@@ -306,6 +339,42 @@
     state.markerBaseline = null;
     state.markerLast = 0;
     state.markerStableTicks = 0;
+    state.markerStableSince = 0;
+  }
+
+  function connectArmedKeepalive() {
+    if (armedPort) return;
+    try {
+      armedPort = chrome.runtime.connect({ name: 'cca-armed' });
+      armedPort.onDisconnect.addListener(() => {
+        armedPort = null;
+        if (!state.armed) return;
+        // SW reiniciou — reconecta para o poller voltar.
+        if (armedPortRetryTimer) clearTimeout(armedPortRetryTimer);
+        armedPortRetryTimer = setTimeout(() => {
+          armedPortRetryTimer = null;
+          if (state.armed) connectArmedKeepalive();
+        }, 400);
+      });
+      dlog('keepalive: conectado ao service worker');
+    } catch (err) {
+      dlog('keepalive: falha ao conectar', err);
+      armedPort = null;
+    }
+  }
+
+  function disconnectArmedKeepalive() {
+    if (armedPortRetryTimer) {
+      clearTimeout(armedPortRetryTimer);
+      armedPortRetryTimer = null;
+    }
+    if (!armedPort) return;
+    try {
+      armedPort.disconnect();
+    } catch {
+      // ignore
+    }
+    armedPort = null;
   }
 
   /** Texto de parada ativo (não vazio). */
@@ -602,13 +671,24 @@
       return false;
     }
 
-    dlog('sendMessage: composer =', composer.id || composer.className || composer.tagName);
+    dlog('sendMessage: composer =', composer.id || composer.className || composer.tagName, {
+      hidden: pageLikelyBackgrounded(),
+    });
     setStatus(`Campo achado (<code>${composer.id || composer.tagName}</code>). Inserindo…`);
-    const ok = setComposerText(composer, text);
+
+    let ok = false;
+    for (let attempt = 0; attempt < INSERT_ATTEMPTS; attempt++) {
+      ok = setComposerText(composer, text);
+      if (ok) break;
+      dlog('sendMessage: inserção falhou, retry', attempt + 1);
+      await sleep(250 + attempt * 200);
+    }
     if (!ok) {
-      dlog('sendMessage: inserção FALHOU no composer');
+      dlog('sendMessage: inserção FALHOU no composer após retries');
       setStatus(
-        'Achei o campo, mas o site bloqueou a inserção. Clique uma vez no input do chat e tente Iniciar de novo.'
+        pageLikelyBackgrounded()
+          ? 'Aba em segundo plano bloqueou a inserção. Mantendo ativo — tentando de novo…'
+          : 'Achei o campo, mas o site bloqueou a inserção. Tentando de novo…'
       );
       return false;
     }
@@ -648,6 +728,7 @@
     state.phase = 'watch';
     state.sawStreaming = false;
     state.stableTicks = 0;
+    state.replyStableSince = 0;
     state.lastReplySig = getLastReplySignature();
     // Baseline null → o tick registra a contagem ~1,5s após o envio, quando
     // nossa própria mensagem já entrou no DOM (ela pode conter o marcador).
@@ -660,6 +741,8 @@
 
     // Evita reagir imediatamente após o nosso próprio send
     if (Date.now() - state.lastSendAt < 2500) return;
+    // Backoff após falha de inserção (comum com aba/minimizado em segundo plano)
+    if (Date.now() - state.lastSendAttemptAt < SEND_RETRY_MS) return;
 
     if (checkStopTextAndHalt()) return;
 
@@ -690,6 +773,7 @@
         if (c > state.markerLast) {
           state.markerLast = c;
           state.markerStableTicks = 0;
+          state.markerStableSince = 0;
           state.pendingSend = false;
           state.phase = 'streaming';
           state.sawStreaming = true;
@@ -745,6 +829,7 @@
       if (c > state.markerLast) {
         state.markerLast = c;
         state.markerStableTicks = 0;
+        state.markerStableSince = 0;
         state.pendingSend = false;
         state.phase = 'streaming';
         state.sawStreaming = true;
@@ -754,6 +839,7 @@
     }
 
     const text = state.text;
+    state.lastSendAttemptAt = Date.now();
     const sent = await sendMessage(text);
     if (sent) {
       state.remaining -= 1;
@@ -772,10 +858,23 @@
         );
       }
     } else {
-      state.armed = false;
-      state.finishing = false;
-      state.phase = 'idle';
-      stopTimer();
+      // Não desarma: com o navegador minimizado/outra aba o focus() pode falhar.
+      // Mantém armado e reabre a janela de observação para tentar de novo.
+      dlog('onGenerationEnded: envio falhou — reagendando (background?)', {
+        hidden: pageLikelyBackgrounded(),
+      });
+      state.phase = 'watch';
+      state.sawStreaming = true;
+      // Força nova estabilização curta antes do próximo disparo.
+      state.markerStableTicks = 0;
+      if (state.markerStableSince) state.markerStableSince = Date.now();
+      state.replyStableSince = 0;
+      state.stableTicks = 0;
+      setStatus(
+        pageLikelyBackgrounded()
+          ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (${restHtml()})`
+          : `Falha ao enviar. Continuando a tentar… (${restHtml()})`
+      );
     }
     state.pendingSend = false;
     updateFab();
@@ -806,6 +905,7 @@
         state.markerBaseline = current;
         state.markerLast = current;
         state.markerStableTicks = 0;
+        state.markerStableSince = Date.now();
         dlog('marcador: baseline =', current);
         setStatus(
           `Base: <strong>${current}</strong> ocorrência(s) de "${escapeHtml(state.marker)}". Monitorando novas… (${restHtml()})`
@@ -817,14 +917,17 @@
     if (current > state.markerLast) {
       state.markerLast = current;
       state.markerStableTicks = 0;
+      state.markerStableSince = 0;
       state.sawStreaming = true;
       state.phase = 'streaming';
     } else {
       state.markerStableTicks += 1;
+      if (!state.markerStableSince) state.markerStableSince = Date.now();
     }
 
     const news = state.markerLast - state.markerBaseline;
-    const stable = state.markerStableTicks >= 6; // ~2,4s sem ocorrência nova
+    // Wall-clock: funciona mesmo com setInterval throttled (aba/minimizado).
+    const stable = markerStableFor(STABLE_MS) || state.markerStableTicks >= 6;
     const gen = hasHardStreamingSignal();
 
     if (gen) {
@@ -836,7 +939,9 @@
 
     // 1º envio com chat parado: nada cresceu desde o início e sem geração.
     const isFirstSend = state.remaining === state.times;
-    if (isFirstSend && news === 0 && state.markerStableTicks >= 12 && elapsed >= 4000) {
+    const firstStable =
+      markerStableFor(FIRST_SEND_STABLE_MS) || state.markerStableTicks >= 12;
+    if (isFirstSend && news === 0 && firstStable && elapsed >= 4000) {
       dlog('marcador: chat parado — 1º envio imediato');
       void onGenerationEnded('chat parado, 1º envio');
       return;
@@ -847,6 +952,9 @@
         news,
         min: state.minNew,
         stableTicks: state.markerStableTicks,
+        stableMs: state.markerStableSince
+          ? Date.now() - state.markerStableSince
+          : 0,
       });
       void onGenerationEnded(`${news}/${state.minNew} novas e estável`);
       return;
@@ -885,9 +993,11 @@
       const sig = getLastReplySignature();
       if (sig && sig === state.lastReplySig) {
         state.stableTicks += 1;
+        if (!state.replyStableSince) state.replyStableSince = Date.now();
       } else {
         state.lastReplySig = sig;
         state.stableTicks = 0;
+        state.replyStableSince = 0;
         if (sig) state.sawStreaming = true;
       }
     }
@@ -902,7 +1012,7 @@
     }
 
     const sendReady = isSendButtonReady();
-    const stableEnough = state.stableTicks >= 5; // ~2s com poll 400ms
+    const stableEnough = replyStableFor(2000) || state.stableTicks >= 5;
     const finishedByStop =
       state.sawStreaming && state.phase === 'streaming' && !gen && elapsed >= 2500;
     // Não exige sendReady: ChatGPT com composer vazio mostra o botão de voz,
@@ -919,12 +1029,17 @@
       dlog('fim detectado:', finishedByStop ? 'stop sumiu' : 'send voltou', {
         elapsed,
         stableTicks: state.stableTicks,
+        stableMs: state.replyStableSince ? Date.now() - state.replyStableSince : 0,
       });
       void onGenerationEnded(finishedByStop ? 'stop sumiu' : 'send voltou');
       return;
     }
     if (finishedByStable) {
-      dlog('fim detectado: texto estável', { elapsed, stableTicks: state.stableTicks });
+      dlog('fim detectado: texto estável', {
+        elapsed,
+        stableTicks: state.stableTicks,
+        stableMs: state.replyStableSince ? Date.now() - state.replyStableSince : 0,
+      });
       void onGenerationEnded('texto estável');
       return;
     }
@@ -961,6 +1076,7 @@
     state.phase = 'idle';
     state.pendingSend = false;
     state.stopTextBaseline = null;
+    disconnectArmedKeepalive();
     stopTimer();
     updateFab();
     setStatus(`Concluído. IA terminou a última resposta (${reason}).`);
@@ -1091,6 +1207,7 @@
 
   async function sendFirstNow(total) {
     state.pendingSend = true;
+    state.lastSendAttemptAt = Date.now();
     setStatus(`Chat parado — enviando agora… (restam <strong>${total}</strong>)`);
     const sent = await sendMessage(state.text);
     if (sent) {
@@ -1108,12 +1225,17 @@
         );
       }
     } else {
-      stopTimer();
-      setStatus('Falha ao enviar. Confira o campo de mensagem do chat e tente de novo.');
-      state.armed = false;
-      state.finishing = false;
-      state.remaining = 0;
-      state.phase = 'idle';
+      // Mantém armado e tenta de novo via tick (útil com navegador minimizado).
+      dlog('sendFirstNow: falhou — reagendando', { hidden: pageLikelyBackgrounded() });
+      state.phase = 'watch';
+      state.sawStreaming = false;
+      state.lastSendAt = Date.now() - 5000;
+      resetMarkerCounters();
+      setStatus(
+        pageLikelyBackgrounded()
+          ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (restam <strong>${total}</strong>)`
+          : `Falha ao enviar. Continuando a tentar… (restam <strong>${total}</strong>)`
+      );
     }
     state.pendingSend = false;
     updateFab();
@@ -1129,8 +1251,11 @@
     state.finishing = false;
     state.pendingSend = false;
     state.stableTicks = 0;
+    state.replyStableSince = 0;
     state.sawStreaming = false;
+    state.lastSendAttemptAt = 0;
     state.stopTextBaseline = stopTextActive() ? countStopText() : null;
+    connectArmedKeepalive();
     startTimer();
     updateFab();
 
@@ -1167,6 +1292,7 @@
     state.phase = 'idle';
     state.sawStreaming = false;
     state.stopTextBaseline = null;
+    disconnectArmedKeepalive();
     stopTimer();
     setStatus('Parado.');
     updateFab();
@@ -1299,6 +1425,16 @@
       sendResponse({ ok: true });
       return true;
     }
+    if (msg?.type === 'cca-tick') {
+      // Poller do service worker (não throttled como setInterval na aba oculta).
+      try {
+        tick();
+      } catch (err) {
+        dlog('cca-tick erro', err);
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
     if (msg?.type === 'cca-open-panel' || msg?.type === 'cca-toggle-panel') {
       if (!rootEl) buildUi();
       if (msg.type === 'cca-open-panel') openPanel();
@@ -1310,6 +1446,18 @@
   });
 
   window.addEventListener('cca-reopen', () => openPanel());
+
+  // Ao voltar o foco/visibilidade, dispara um tick imediato (útil após minimizar).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!state.armed) return;
+    dlog('visibility: aba visível de novo — tick imediato');
+    try {
+      tick();
+    } catch (err) {
+      dlog('visibility tick erro', err);
+    }
+  });
 
   loadSettings(() => {
     buildUi();
