@@ -4,7 +4,7 @@
  * em segundo plano; o service worker não sofre o mesmo limite e envia
  * `cca-tick` ~a cada 400ms para essas abas.
  */
-const armedTabs = new Map(); // tabId -> port
+const armedTabs = new Map(); // tabId -> { port, restoreAutoDiscardable }
 let pollInterval = null;
 
 const POLL_MS = 400;
@@ -22,10 +22,16 @@ function ensurePoller() {
       stopPoller();
       return;
     }
-    for (const tabId of armedTabs.keys()) {
-      chrome.tabs.sendMessage(tabId, { type: 'cca-tick' }).catch(() => {
-        // Aba fechada / content script morto — limpa no disconnect do port.
-      });
+    const now = Date.now();
+    for (const [tabId, entry] of armedTabs) {
+      try {
+        // Mensagens pela porta longa mantêm o service worker ativo no MV3 e
+        // acordam o content script mesmo quando a aba está sem foco.
+        entry.port.postMessage({ type: 'cca-tick', now });
+      } catch {
+        // Defesa para uma porta que desconectou entre os ticks.
+        if (armedTabs.get(tabId) === entry) armedTabs.delete(tabId);
+      }
     }
   }, POLL_MS);
 }
@@ -42,12 +48,25 @@ chrome.runtime.onConnect.addListener((port) => {
     return;
   }
 
-  armedTabs.set(tabId, port);
+  const previous = armedTabs.get(tabId);
+  const restoreAutoDiscardable =
+    previous?.restoreAutoDiscardable ?? (port.sender?.tab?.autoDiscardable !== false);
+  const entry = { port, restoreAutoDiscardable };
+  armedTabs.set(tabId, entry);
   ensurePoller();
+
+  // Evita que o Memory Saver descarte a página no meio de uma execução.
+  // A configuração é restaurada quando a extensão desarma normalmente.
+  chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
 
   port.onDisconnect.addListener(() => {
     const current = armedTabs.get(tabId);
-    if (current === port) armedTabs.delete(tabId);
+    if (current === entry) {
+      armedTabs.delete(tabId);
+      chrome.tabs
+        .update(tabId, { autoDiscardable: restoreAutoDiscardable })
+        .catch(() => {});
+    }
     if (armedTabs.size === 0) stopPoller();
   });
 });

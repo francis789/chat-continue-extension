@@ -91,7 +91,9 @@
   let fabEl = null;
   /** Porta longa com o SW enquanto armado (evita throttle de aba em background). */
   let armedPort = null;
-  let armedPortRetryTimer = null;
+  let armedPortReconnectQueued = false;
+  /** Delays que também podem ser liberados pelos pulsos vindos do SW. */
+  const pendingSleeps = new Set();
 
   let extVersion = '?';
   try {
@@ -355,15 +357,21 @@
     if (armedPort) return;
     try {
       armedPort = chrome.runtime.connect({ name: 'cca-armed' });
+      armedPort.onMessage.addListener((msg) => {
+        if (msg?.type !== 'cca-tick') return;
+        runHeartbeat(msg.now);
+      });
       armedPort.onDisconnect.addListener(() => {
         armedPort = null;
         if (!state.armed) return;
-        // SW reiniciou — reconecta para o poller voltar.
-        if (armedPortRetryTimer) clearTimeout(armedPortRetryTimer);
-        armedPortRetryTimer = setTimeout(() => {
-          armedPortRetryTimer = null;
+        // SW reiniciou — reconecta no mesmo ciclo de tarefas. Um setTimeout
+        // aqui também seria throttled justamente quando a aba está oculta.
+        if (armedPortReconnectQueued) return;
+        armedPortReconnectQueued = true;
+        queueMicrotask(() => {
+          armedPortReconnectQueued = false;
           if (state.armed) connectArmedKeepalive();
-        }, 400);
+        });
       });
       dlog('keepalive: conectado ao service worker');
     } catch (err) {
@@ -373,10 +381,7 @@
   }
 
   function disconnectArmedKeepalive() {
-    if (armedPortRetryTimer) {
-      clearTimeout(armedPortRetryTimer);
-      armedPortRetryTimer = null;
-    }
+    armedPortReconnectQueued = false;
     if (!armedPort) return;
     try {
       armedPort.disconnect();
@@ -741,7 +746,42 @@
   }
 
   function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
+    const delay = Math.max(0, Number(ms) || 0);
+    return new Promise((resolve) => {
+      const waiter = {
+        deadline: Date.now() + delay,
+        timer: null,
+        resolve: null,
+      };
+      waiter.resolve = () => {
+        if (!pendingSleeps.delete(waiter)) return;
+        if (waiter.timer != null) clearTimeout(waiter.timer);
+        resolve();
+      };
+      pendingSleeps.add(waiter);
+      // Caminho normal com a aba visível. Em segundo plano, runHeartbeat()
+      // libera o mesmo waiter pelo relógio de parede, sem depender deste timer.
+      waiter.timer = setTimeout(waiter.resolve, delay);
+    });
+  }
+
+  function flushDueSleeps(now = Date.now()) {
+    const timestamp = Number.isFinite(now) ? now : Date.now();
+    for (const waiter of Array.from(pendingSleeps)) {
+      if (timestamp >= waiter.deadline) waiter.resolve();
+    }
+  }
+
+  function runHeartbeat(now = Date.now()) {
+    // Resolve primeiro os awaits internos que estariam throttled na aba oculta.
+    // A continuação roda como microtask depois deste handler; o tick atual ainda
+    // respeita pendingSend e o próximo pulso observa o novo estado.
+    flushDueSleeps(now);
+    try {
+      tick();
+    } catch (err) {
+      dlog('heartbeat erro', err);
+    }
   }
 
   // ─── Máquina de estados ──────────────────────────────────────────
@@ -1449,12 +1489,8 @@
       return true;
     }
     if (msg?.type === 'cca-tick') {
-      // Poller do service worker (não throttled como setInterval na aba oculta).
-      try {
-        tick();
-      } catch (err) {
-        dlog('cca-tick erro', err);
-      }
+      // Compatibilidade com versões anteriores do service worker durante reload.
+      runHeartbeat(msg.now);
       sendResponse({ ok: true });
       return true;
     }
@@ -1475,15 +1511,11 @@
     if (document.visibilityState !== 'visible') return;
     if (!state.armed) return;
     dlog('visibility: aba visível de novo — tick imediato');
-    try {
-      tick();
-    } catch (err) {
-      dlog('visibility tick erro', err);
-    }
+    runHeartbeat();
   });
 
   loadSettings(() => {
     buildUi();
-    setInterval(tick, POLL_MS);
+    setInterval(runHeartbeat, POLL_MS);
   });
 })();
