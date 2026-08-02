@@ -18,7 +18,7 @@
     minNew: 1,
     /** Máximo TOTAL de ocorrências na página — ao atingir, para (0 = sem limite). */
     maxTotal: 0,
-    /** Texto que, ao surgir na conversa, encerra as inserções. */
+    /** Texto que encerra as inserções após concluir a resposta da IA. */
     stopText: 'COMANDO FINALIZADO',
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
@@ -61,7 +61,7 @@
     marker: DEFAULTS.marker,
     minNew: DEFAULTS.minNew,
     maxTotal: DEFAULTS.maxTotal,
-    /** Texto de parada: ao surgir na conversa, não insere mais. */
+    /** Texto de parada: encerra somente após a resposta da IA terminar. */
     stopText: DEFAULTS.stopText,
     /** Contagem do texto de parada no Iniciar (null = ainda não registrada). */
     stopTextBaseline: null,
@@ -274,8 +274,8 @@
     }
   }
 
-  /** Texto da última bolha do assistente — para detectar quando parou de crescer. */
-  function getLastReplySignature() {
+  /** Última bolha conhecida do assistente nas interfaces suportadas. */
+  function getLastAssistantReplyElement() {
     const groups = [
       document.querySelectorAll('[data-message-author-role="assistant"]'),
       document.querySelectorAll('[data-turn="assistant"]'),
@@ -289,7 +289,16 @@
       if (!list.length) continue;
       const el = list[list.length - 1];
       if (!el || el.closest('#cca-root')) continue;
-      const t = (el.innerText || '').trim();
+      return el;
+    }
+    return null;
+  }
+
+  /** Texto da última bolha do assistente — para detectar quando parou de crescer. */
+  function getLastReplySignature() {
+    const reply = getLastAssistantReplyElement();
+    if (reply) {
+      const t = (reply.innerText || '').trim();
       if (t) return `${t.length}:${t.slice(-80)}`;
     }
     // Genérico: texto do conteúdo principal (painel fica fora do <main>).
@@ -400,26 +409,39 @@
   }
 
   /**
-   * Se o texto de parada surgiu na conversa desde o Iniciar, encerra as
-   * inserções e retorna true. Caso contrário, false.
+   * Depois que o fim da resposta foi confirmado, verifica se o texto de parada
+   * surgiu desde o Iniciar e está na última resposta conhecida da IA. Encerra
+   * as inserções e retorna true somente nesse momento.
    */
-  function checkStopTextAndHalt() {
+  function checkStopTextAndHaltAfterGeneration() {
     if (!stopTextActive() || !state.armed) return false;
+
+    // Defesa adicional: esta função só deve ser chamada após o fim confirmado.
+    if (isGenerating()) return false;
+
     const current = countStopText();
     if (state.stopTextBaseline === null) {
       state.stopTextBaseline = current;
       return false;
     }
     if (current <= state.stopTextBaseline) return false;
+
+    // Evita aceitar texto de botões, prompts ou outras áreas da página. Em uma
+    // interface sem seletor conhecido, mantém a contagem da conversa como
+    // fallback para não quebrar os sites já suportados.
+    const reply = getLastAssistantReplyElement();
+    if (reply && !countIn(reply.innerText || '', state.stopText)) return false;
+
     dlog('texto de parada detectado', {
       text: state.stopText,
       baseline: state.stopTextBaseline,
       current,
+      source: reply ? 'última resposta da IA' : 'conversa (fallback)',
     });
     stop();
     setStatus(
-      `🛑 <strong>Texto de parada encontrado</strong>: "${escapeHtml(state.stopText)}". ` +
-        `Inserções encerradas.`
+      `🛑 <strong>Resposta concluída com o texto de parada</strong>: ` +
+        `"${escapeHtml(state.stopText)}". Inserções encerradas.`
     );
     return true;
   }
@@ -744,8 +766,6 @@
     // Backoff após falha de inserção (comum com aba/minimizado em segundo plano)
     if (Date.now() - state.lastSendAttemptAt < SEND_RETRY_MS) return;
 
-    if (checkStopTextAndHalt()) return;
-
     // Modo finalização: a última inserção já foi enviada. Ao detectar que a IA
     // terminou de responder a ela, encerra (para timer/contagens) sem reenviar.
     if (state.finishing) {
@@ -781,6 +801,10 @@
           return;
         }
       }
+      if (checkStopTextAndHaltAfterGeneration()) {
+        state.pendingSend = false;
+        return;
+      }
       finishRun(reason);
       return;
     }
@@ -797,11 +821,6 @@
     await sleep(AFTER_IDLE_MS);
 
     if (!state.armed || state.remaining <= 0) {
-      state.pendingSend = false;
-      return;
-    }
-
-    if (checkStopTextAndHalt()) {
       state.pendingSend = false;
       return;
     }
@@ -836,6 +855,11 @@
         setStatus('Novas ocorrências surgiram durante a espera — aguardando estabilizar.');
         return;
       }
+    }
+
+    if (checkStopTextAndHaltAfterGeneration()) {
+      state.pendingSend = false;
+      return;
     }
 
     const text = state.text;
@@ -977,8 +1001,6 @@
     if (!state.armed || state.pendingSend) return;
     if (!state.finishing && state.remaining <= 0) return;
     if (state.phase === 'idle') return;
-
-    if (checkStopTextAndHalt()) return;
 
     const elapsed = Date.now() - state.lastSendAt;
 
@@ -1344,7 +1366,7 @@
         </div>
         <label for="cca-max">Máx. total da string na página (0 = sem limite)</label>
         <input id="cca-max" type="number" min="0" max="9999" step="1" />
-        <label for="cca-stop-text">Texto de parada (encerra ao surgir na conversa)</label>
+        <label for="cca-stop-text">Texto de parada (verificado após a resposta terminar)</label>
         <input id="cca-stop-text" type="text" spellcheck="false"
           placeholder="ex.: COMANDO FINALIZADO" />
         <div id="cca-status">Configure e clique em Iniciar.</div>
@@ -1357,8 +1379,9 @@
         <p id="cca-hint">
           Com a string de resposta preenchida, o envio só ocorre quando surgirem
           pelo menos N novas ocorrências dela na página E a contagem parar de
-          crescer. Deixe vazia para usar a detecção automática. Se o texto de
-          parada surgir na conversa, as inserções são encerradas imediatamente.
+          crescer. Deixe vazia para usar a detecção automática. O texto de
+          parada só é verificado depois que a IA termina a resposta e deve estar
+          presente nessa resposta concluída.
         </p>
       </div>
       <div id="cca-fab-wrap">
