@@ -11,18 +11,20 @@
   const STORAGE_KEY = 'cca_settings';
   const DEFAULTS = {
     text: 'execute o comando',
-    times: 4,
+    times: 100,
     /** String que identifica texto de resposta da IA (modo contagem). */
     marker: '=ff=',
     /** Mínimo de NOVAS ocorrências do marcador antes de enviar. */
     minNew: 1,
     /** Máximo TOTAL de ocorrências na página — ao atingir, para (0 = sem limite). */
-    maxTotal: 0,
+    maxTotal: 100,
     /** Texto que encerra as inserções após concluir a resposta da IA. */
     stopText: 'COMANDO FINALIZADO',
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXT = 'continue';
+  const LEGACY_DEFAULT_TIMES = 4;
+  const LEGACY_DEFAULT_MAX_TOTAL = 0;
 
   /** Delay após a IA parar, antes de digitar (UI estabilizar). */
   const AFTER_IDLE_MS = 1200;
@@ -1389,26 +1391,28 @@
     rootEl.innerHTML = `
       <div id="cca-panel" data-open="0">
         <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
-        <label for="cca-text">Texto a inserir após a IA terminar</label>
-        <textarea id="cca-text" spellcheck="false"></textarea>
-        <label for="cca-marker">String de resposta da IA (modo contagem)</label>
+        <label for="cca-text" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">Texto a inserir após a IA terminar <span class="cca-info" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">ⓘ</span></label>
+        <textarea id="cca-text" spellcheck="false" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta."></textarea>
+        <label for="cca-marker" title="Texto/marcador esperado na resposta da IA para contar novas ocorrências (ex.: =ff=). Deixe em branco para modo automático.">String de resposta da IA (modo contagem) <span class="cca-info" title="Texto/marcador esperado na resposta da IA para contar novas ocorrências (ex.: =ff=). Deixe em branco para modo automático.">ⓘ</span></label>
         <input id="cca-marker" type="text" spellcheck="false"
-          placeholder='ex.: uma string que aparece nas respostas' />
+          placeholder='ex.: uma string que aparece nas respostas'
+          title="Texto/marcador esperado na resposta da IA para contar novas ocorrências (ex.: =ff=). Deixe em branco para modo automático." />
         <div id="cca-row">
           <div>
-            <label for="cca-times">Quantas vezes</label>
-            <input id="cca-times" type="number" min="1" max="99" step="1" />
+            <label for="cca-times" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">Quantas vezes <span class="cca-info" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">ⓘ</span></label>
+            <input id="cca-times" type="number" min="1" max="9999" step="1" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100)." />
           </div>
           <div>
-            <label for="cca-min">Mín. novas ocorrências</label>
-            <input id="cca-min" type="number" min="1" max="999" step="1" />
+            <label for="cca-min" title="Quantidade mínima de novas aparições do marcador na página para autorizar o próximo envio.">Mín. novas ocorrências <span class="cca-info" title="Quantidade mínima de novas aparições do marcador na página para autorizar o próximo envio.">ⓘ</span></label>
+            <input id="cca-min" type="number" min="1" max="999" step="1" title="Quantidade mínima de novas aparições do marcador na página para autorizar o próximo envio." />
           </div>
         </div>
-        <label for="cca-max">Máx. total da string na página (0 = sem limite)</label>
-        <input id="cca-max" type="number" min="0" max="9999" step="1" />
-        <label for="cca-stop-text">Texto de parada (verificado após a resposta terminar)</label>
+        <label for="cca-max" title="Limite máximo acumulado da string de resposta na página. Ao atingir este número, as inserções são interrompidas (padrão: 100; 0 = sem limite).">Máx. total da string na página (0 = sem limite) <span class="cca-info" title="Limite máximo acumulado da string de resposta na página. Ao atingir este número, as inserções são interrompidas (padrão: 100; 0 = sem limite).">ⓘ</span></label>
+        <input id="cca-max" type="number" min="0" max="9999" step="1" title="Limite máximo acumulado da string de resposta na página. Ao atingir este número, as inserções são interrompidas (padrão: 100; 0 = sem limite)." />
+        <label for="cca-stop-text" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">Texto de parada (verificado após a resposta terminar) <span class="cca-info" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">ⓘ</span></label>
         <input id="cca-stop-text" type="text" spellcheck="false"
-          placeholder="ex.: COMANDO FINALIZADO" />
+          placeholder="ex.: COMANDO FINALIZADO"
+          title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios." />
         <div id="cca-status">Configure e clique em Iniciar.</div>
         <div id="cca-count"></div>
         <div id="cca-timer" style="display:none"></div>
@@ -1467,13 +1471,18 @@
         // Mantém texto personalizado; migra só o default antigo.
         if (saved && saved !== LEGACY_DEFAULT_TEXT) state.text = saved;
         else state.text = DEFAULTS.text;
-        state.times = Number.isFinite(s.times) && s.times >= 1 ? s.times : DEFAULTS.times;
+        state.times =
+          Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
+            ? s.times
+            : DEFAULTS.times;
         state.marker =
           typeof s.marker === 'string' && s.marker.trim() ? s.marker : DEFAULTS.marker;
         state.minNew =
           Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
         state.maxTotal =
-          Number.isFinite(s.maxTotal) && s.maxTotal >= 0 ? s.maxTotal : DEFAULTS.maxTotal;
+          Number.isFinite(s.maxTotal) && s.maxTotal !== LEGACY_DEFAULT_MAX_TOTAL && s.maxTotal >= 0
+            ? s.maxTotal
+            : DEFAULTS.maxTotal;
         state.stopText =
           typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
         cb();

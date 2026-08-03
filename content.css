@@ -210,3 +210,17 @@
   color: #6e7681;
   line-height: 1.4;
 }
+
+.cca-info {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 11px;
+  color: #58a6ff;
+  cursor: help;
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
+
+.cca-info:hover {
+  opacity: 1;
+}
