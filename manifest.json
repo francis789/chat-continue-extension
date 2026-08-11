@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chat Continue Auto",
-  "version": "1.0.15",
+  "version": "1.0.22",
   "description": "Quando a IA para de gerar, insere um texto no input e envia — N vezes.",
   "icons": {
     "48": "icons/icon48.png",
@@ -16,6 +16,8 @@
     "https://*.claude.ai/*",
     "https://gemini.google.com/*",
     "https://notebooklm.google.com/*",
+    "https://notebook.google.com/*",
+    "https://*.notebook.google.com/*",
     "https://www.perplexity.ai/*",
     "https://chat.deepseek.com/*",
     "https://aistudio.google.com/*"
@@ -40,6 +42,8 @@
         "https://*.claude.ai/*",
         "https://gemini.google.com/*",
         "https://notebooklm.google.com/*",
+        "https://notebook.google.com/*",
+        "https://*.notebook.google.com/*",
         "https://www.perplexity.ai/*",
         "https://chat.deepseek.com/*",
         "https://aistudio.google.com/*"

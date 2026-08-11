@@ -20,6 +20,13 @@
     maxTotal: 100,
     /** Texto que encerra as inserções após concluir a resposta da IA. */
     stopText: 'COMANDO FINALIZADO',
+    /**
+     * Textos (vírgula) que, se presentes no título, impedem a exclusão
+     * automática de notebooks não fixados no NotebookLM.
+     */
+    protectTitles: '',
+    /** Seção NotebookLM — limpeza expandida no painel. */
+    nlmSectionOpen: false,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXT = 'continue';
@@ -40,6 +47,10 @@
   const SEND_RETRY_MS = 2000;
   /** Tentativas de inserção no composer por envio. */
   const INSERT_ATTEMPTS = 5;
+  /** Se pendingSend ficar preso além disso, libera (envio travado). */
+  const PENDING_SEND_TIMEOUT_MS = 45000;
+  /** Sem novo envio por tanto tempo (e IA parada) → força novo ciclo. */
+  const STUCK_WATCH_MS = 150000;
 
   const state = {
     armed: false,
@@ -49,9 +60,13 @@
     /** idle | watch | streaming */
     phase: 'idle',
     pendingSend: false,
+    /** Timestamp em que pendingSend ficou true (0 = livre). */
+    pendingSendSince: 0,
     lastSendAt: 0,
     /** Última tentativa de envio (sucesso ou falha) — para backoff. */
     lastSendAttemptAt: 0,
+    /** Último nudge do watchdog de progresso travado. */
+    lastStuckNudgeAt: 0,
     panelOpen: false,
     /** Assinatura da última resposta (tamanho) para detectar estabilização. */
     lastReplySig: '',
@@ -86,6 +101,15 @@
     timerStop: 0,
     /** Temporizador em contagem. */
     timerRunning: false,
+    /**
+     * Textos (vírgula) que protegem notebooks da exclusão em massa
+     * se aparecerem no título.
+     */
+    protectTitles: DEFAULTS.protectTitles,
+    /** Seção NotebookLM — limpeza expandida. */
+    nlmSectionOpen: DEFAULTS.nlmSectionOpen,
+    /** Exclusão em massa de notebooks em andamento. */
+    deletingNotebooks: false,
   };
 
   let rootEl = null;
@@ -145,6 +169,10 @@
 
   function isPerplexity() {
     return /perplexity\.ai$/.test(host());
+  }
+
+  function isNotebookLM() {
+    return /notebooklm\.google\.com$|notebook\.google\.com$/.test(host());
   }
 
   function visible(el) {
@@ -365,14 +393,14 @@
       });
       armedPort.onDisconnect.addListener(() => {
         armedPort = null;
-        if (!state.armed) return;
+        if (!state.armed && !state.deletingNotebooks) return;
         // SW reiniciou — reconecta no mesmo ciclo de tarefas. Um setTimeout
         // aqui também seria throttled justamente quando a aba está oculta.
         if (armedPortReconnectQueued) return;
         armedPortReconnectQueued = true;
         queueMicrotask(() => {
           armedPortReconnectQueued = false;
-          if (state.armed) connectArmedKeepalive();
+          if (state.armed || state.deletingNotebooks) connectArmedKeepalive();
         });
       });
       dlog('keepalive: conectado ao service worker');
@@ -383,6 +411,8 @@
   }
 
   function disconnectArmedKeepalive() {
+    // Mantém a porta se ainda houver limpeza ou execução automática ativa.
+    if (state.armed || state.deletingNotebooks) return;
     armedPortReconnectQueued = false;
     if (!armedPort) return;
     try {
@@ -692,59 +722,145 @@
     el.dispatchEvent(new KeyboardEvent('keyup', opts));
   }
 
+  /**
+   * Popup "Parar de gerar?" (NotebookLM/Gemini): ao enviar texto enquanto a IA
+   * ainda gera, o site pergunta se deve interromper. Clica em "Continuar gerando".
+   * Só age com a extensão armada — parada, deixa o modal intacto.
+   */
+  function dismissStopGeneratingDialog() {
+    if (!state.armed) return false;
+    const dialogs = Array.from(
+      document.querySelectorAll(
+        'mat-dialog-container, [role="dialog"], .mat-mdc-dialog-container, .cdk-overlay-pane'
+      )
+    );
+    for (const dlg of dialogs) {
+      if (dlg.closest?.('#cca-root')) continue;
+      const text = (dlg.innerText || dlg.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const lower = text.toLowerCase();
+      if (
+        !/parar de gerar|stop generating|interromper a resposta|interrupt (the )?response|removê-la da conversa|remove it from the conversation/.test(
+          lower
+        )
+      ) {
+        continue;
+      }
+
+      const btns = Array.from(dlg.querySelectorAll('button, [role="button"]'));
+      const continueBtn = btns.find((b) => {
+        const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        return (
+          /continuar gerando|continue generating|keep generating|continuar|keep going/.test(t) &&
+          !/parar$|^stop$|interromper/.test(t)
+        );
+      });
+      if (!continueBtn) continue;
+
+      dlog('popup "Parar de gerar?" — clicando Continuar gerando');
+      try {
+        continueBtn.click();
+      } catch {
+        try {
+          continueBtn.dispatchEvent(
+            new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+          );
+        } catch {
+          // ignore
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
   async function sendMessage(text) {
-    const composer = findComposer();
-    if (!composer) {
-      dlog('sendMessage: composer NÃO encontrado');
-      setStatus('Não achei o campo de mensagem nesta página.');
+    try {
+      dismissStopGeneratingDialog();
+
+      const composer = findComposer();
+      if (!composer) {
+        dlog('sendMessage: composer NÃO encontrado');
+        setStatus('Não achei o campo de mensagem nesta página.');
+        return false;
+      }
+
+      dlog('sendMessage: composer =', composer.id || composer.className || composer.tagName, {
+        hidden: pageLikelyBackgrounded(),
+      });
+      setStatus(`Campo achado (<code>${composer.id || composer.tagName}</code>). Inserindo…`);
+
+      let ok = false;
+      for (let attempt = 0; attempt < INSERT_ATTEMPTS; attempt++) {
+        dismissStopGeneratingDialog();
+        ok = setComposerText(composer, text);
+        if (ok) break;
+        dlog('sendMessage: inserção falhou, retry', attempt + 1);
+        await sleep(250 + attempt * 200);
+      }
+      if (!ok) {
+        dlog('sendMessage: inserção FALHOU no composer após retries');
+        setStatus(
+          pageLikelyBackgrounded()
+            ? 'Aba em segundo plano bloqueou a inserção. Mantendo ativo — tentando de novo…'
+            : 'Achei o campo, mas o site bloqueou a inserção. Tentando de novo…'
+        );
+        return false;
+      }
+
+      await sleep(BEFORE_SEND_MS);
+      dismissStopGeneratingDialog();
+
+      const sendBtn = findSendButton();
+      dlog('sendMessage: inserido OK; sendBtn =', sendBtn ? 'achado' : 'não achado');
+      if (sendBtn) {
+        sendBtn.click();
+        await sleep(250);
+        // Continuar gerando = o site bloqueou nosso envio para não interromper a IA.
+        if (dismissStopGeneratingDialog()) {
+          dlog('sendMessage: popup Continuar gerando — envio NÃO concluído');
+          await sleep(200);
+          dismissStopGeneratingDialog();
+          return false;
+        }
+        await sleep(350);
+        if (dismissStopGeneratingDialog()) {
+          dlog('sendMessage: popup Continuar gerando (tardio) — envio NÃO concluído');
+          return false;
+        }
+        state.lastSendAt = Date.now();
+        return true;
+      }
+
+      pressEnter(composer);
+      await sleep(250);
+      if (dismissStopGeneratingDialog()) {
+        dlog('sendMessage: popup Continuar gerando após Enter — envio NÃO concluído');
+        return false;
+      }
+      const retry = findSendButton();
+      if (retry) {
+        retry.click();
+        await sleep(250);
+        if (dismissStopGeneratingDialog()) {
+          dlog('sendMessage: popup Continuar gerando no retry — envio NÃO concluído');
+          return false;
+        }
+        state.lastSendAt = Date.now();
+        return true;
+      }
+
+      state.lastSendAt = Date.now();
+      dismissStopGeneratingDialog();
+      setStatus('Texto inserido. Se não enviou sozinho, pressione Enter no chat.');
+      return true;
+    } catch (err) {
+      dlog('sendMessage erro', err);
       return false;
     }
-
-    dlog('sendMessage: composer =', composer.id || composer.className || composer.tagName, {
-      hidden: pageLikelyBackgrounded(),
-    });
-    setStatus(`Campo achado (<code>${composer.id || composer.tagName}</code>). Inserindo…`);
-
-    let ok = false;
-    for (let attempt = 0; attempt < INSERT_ATTEMPTS; attempt++) {
-      ok = setComposerText(composer, text);
-      if (ok) break;
-      dlog('sendMessage: inserção falhou, retry', attempt + 1);
-      await sleep(250 + attempt * 200);
-    }
-    if (!ok) {
-      dlog('sendMessage: inserção FALHOU no composer após retries');
-      setStatus(
-        pageLikelyBackgrounded()
-          ? 'Aba em segundo plano bloqueou a inserção. Mantendo ativo — tentando de novo…'
-          : 'Achei o campo, mas o site bloqueou a inserção. Tentando de novo…'
-      );
-      return false;
-    }
-
-    await sleep(BEFORE_SEND_MS);
-
-    const sendBtn = findSendButton();
-    dlog('sendMessage: inserido OK; sendBtn =', sendBtn ? 'achado' : 'não achado');
-    if (sendBtn) {
-      sendBtn.click();
-      state.lastSendAt = Date.now();
-      return true;
-    }
-
-    pressEnter(composer);
-    await sleep(200);
-    const retry = findSendButton();
-    if (retry) {
-      retry.click();
-      state.lastSendAt = Date.now();
-      return true;
-    }
-
-    // Texto entrou; Enter pode ter bastado mesmo sem achar o botão.
-    state.lastSendAt = Date.now();
-    setStatus('Texto inserido. Se não enviou sozinho, pressione Enter no chat.');
-    return true;
   }
 
   function sleep(ms) {
@@ -780,7 +896,60 @@
     // respeita pendingSend e o próximo pulso observa o novo estado.
     flushDueSleeps(now);
     try {
+      // Reconecta keepalive se a porta caiu (SW MV3 reiniciou / aba em background).
+      if ((state.armed || state.deletingNotebooks) && !armedPort) {
+        connectArmedKeepalive();
+      }
+
+      // pendingSend preso (ex.: exceção no meio do envio) → libera o ciclo.
+      if (
+        state.pendingSend &&
+        state.pendingSendSince > 0 &&
+        now - state.pendingSendSince > PENDING_SEND_TIMEOUT_MS
+      ) {
+        dlog('watchdog: pendingSend preso — liberando', {
+          sinceMs: now - state.pendingSendSince,
+        });
+        state.pendingSend = false;
+        state.pendingSendSince = 0;
+        if (state.armed && state.phase === 'idle') {
+          state.phase = 'watch';
+          state.sawStreaming = true;
+        }
+        setStatus('Recuperando de envio preso… continuando.');
+      }
+
+      // Mesmo com pendingSend: o popup "Parar de gerar?" aparece ao enviar.
+      // Só com a extensão ativa — parada, não interferir no modal.
+      if (state.armed) dismissStopGeneratingDialog();
       tick();
+
+      // Sem progresso por muito tempo com a IA parada → força novo ciclo de envio.
+      if (
+        state.armed &&
+        !state.pendingSend &&
+        !state.finishing &&
+        state.phase !== 'idle' &&
+        state.remaining > 0
+      ) {
+        const sinceSend = now - (state.lastSendAt || 0);
+        const sinceNudge = now - (state.lastStuckNudgeAt || 0);
+        if (sinceSend >= STUCK_WATCH_MS && sinceNudge >= 30000 && !isGenerating()) {
+          dlog('watchdog: sem progresso — forçando ciclo', { sinceSend });
+          state.lastStuckNudgeAt = now;
+          state.sawStreaming = true;
+          state.phase = 'streaming';
+          state.stableTicks = 99;
+          state.replyStableSince = now - 5000;
+          state.markerStableTicks = 99;
+          if (!state.markerStableSince) state.markerStableSince = now - STABLE_MS;
+          if (markerActive() && state.markerBaseline !== null) {
+            const need = state.markerBaseline + state.minNew;
+            if (state.markerLast < need) state.markerLast = need;
+          }
+          void onGenerationEnded('watchdog sem progresso');
+        }
+      }
     } catch (err) {
       dlog('heartbeat erro', err);
     }
@@ -813,41 +982,38 @@
     if (state.finishing) {
       dlog('onGenerationEnded (finalizando):', reason, '— confirmando fim');
       state.pendingSend = true;
+      state.pendingSendSince = Date.now();
       state.phase = 'idle';
       setStatus(`IA finalizando a última resposta (${reason})… confirmando.`);
 
-      await sleep(AFTER_IDLE_MS);
+      try {
+        await sleep(AFTER_IDLE_MS);
 
-      if (!state.armed) {
-        state.pendingSend = false;
-        return;
-      }
-      if (isGenerating()) {
-        state.pendingSend = false;
-        state.phase = 'streaming';
-        state.sawStreaming = true;
-        setStatus('Geração retomou — aguardando parar de novo.');
-        return;
-      }
-      // Modo contagem: novas ocorrências durante a espera → segue aguardando.
-      if (markerActive() && state.markerBaseline !== null) {
-        const c = countMarker();
-        if (c > state.markerLast) {
-          state.markerLast = c;
-          state.markerStableTicks = 0;
-          state.markerStableSince = 0;
-          state.pendingSend = false;
+        if (!state.armed) return;
+        if (isGenerating()) {
           state.phase = 'streaming';
           state.sawStreaming = true;
-          setStatus('Novas ocorrências surgiram — aguardando estabilizar.');
+          setStatus('Geração retomou — aguardando parar de novo.');
           return;
         }
-      }
-      if (checkStopTextAndHaltAfterGeneration()) {
+        if (markerActive() && state.markerBaseline !== null) {
+          const c = countMarker();
+          if (c > state.markerLast) {
+            state.markerLast = c;
+            state.markerStableTicks = 0;
+            state.markerStableSince = 0;
+            state.phase = 'streaming';
+            state.sawStreaming = true;
+            setStatus('Novas ocorrências surgiram — aguardando estabilizar.');
+            return;
+          }
+        }
+        if (checkStopTextAndHaltAfterGeneration()) return;
+        finishRun(reason);
+      } finally {
         state.pendingSend = false;
-        return;
+        state.pendingSendSince = 0;
       }
-      finishRun(reason);
       return;
     }
 
@@ -855,95 +1021,87 @@
 
     dlog('onGenerationEnded:', reason, '— enviando após delay');
     state.pendingSend = true;
+    state.pendingSendSince = Date.now();
     state.phase = 'idle'; // trava reentrância até o próximo send
     setStatus(
       `IA parou (${reason}). Enviando em ${AFTER_IDLE_MS / 1000}s… (${restHtml()})`
     );
 
-    await sleep(AFTER_IDLE_MS);
+    try {
+      await sleep(AFTER_IDLE_MS);
 
-    if (!state.armed || state.remaining <= 0) {
-      state.pendingSend = false;
-      return;
-    }
+      if (!state.armed || state.remaining <= 0) return;
 
-    if (isGenerating()) {
-      state.pendingSend = false;
-      state.phase = 'streaming';
-      state.sawStreaming = true;
-      setStatus('Geração retomou — aguardando parar de novo.');
-      return;
-    }
-
-    // Modo contagem: se surgiram ocorrências novas durante a espera, aborta.
-    if (markerActive() && state.markerBaseline !== null) {
-      const c = countMarker();
-      if (state.maxTotal >= 1 && c >= state.maxTotal) {
-        dlog('marcador: máximo total atingido antes do envio', { c, max: state.maxTotal });
-        stop();
-        setStatus(
-          `⚠️ <strong>Limite máximo atingido</strong>: ${c}/${state.maxTotal} ` +
-            `ocorrências de "${escapeHtml(state.marker)}" na página. Execução parada.`
-        );
-        return;
-      }
-      if (c > state.markerLast) {
-        state.markerLast = c;
-        state.markerStableTicks = 0;
-        state.markerStableSince = 0;
-        state.pendingSend = false;
+      if (isGenerating()) {
         state.phase = 'streaming';
         state.sawStreaming = true;
-        setStatus('Novas ocorrências surgiram durante a espera — aguardando estabilizar.');
+        setStatus('Geração retomou — aguardando parar de novo.');
         return;
       }
-    }
 
-    if (checkStopTextAndHaltAfterGeneration()) {
-      state.pendingSend = false;
-      return;
-    }
+      if (markerActive() && state.markerBaseline !== null) {
+        const c = countMarker();
+        if (state.maxTotal >= 1 && c >= state.maxTotal) {
+          dlog('marcador: máximo total atingido antes do envio', { c, max: state.maxTotal });
+          stop();
+          setStatus(
+            `⚠️ <strong>Limite máximo atingido</strong>: ${c}/${state.maxTotal} ` +
+              `ocorrências de "${escapeHtml(state.marker)}" na página. Execução parada.`
+          );
+          return;
+        }
+        if (c > state.markerLast) {
+          state.markerLast = c;
+          state.markerStableTicks = 0;
+          state.markerStableSince = 0;
+          state.phase = 'streaming';
+          state.sawStreaming = true;
+          setStatus('Novas ocorrências surgiram durante a espera — aguardando estabilizar.');
+          return;
+        }
+      }
 
-    const text = state.text;
-    state.lastSendAttemptAt = Date.now();
-    const sent = await sendMessage(text);
-    if (sent) {
-      state.remaining -= 1;
-      persistUiFields();
-      if (state.remaining <= 0) {
-        // Última inserção enviada: não encerra ainda. Aguarda a IA terminar
-        // esta resposta (e atingir a ocorrência mínima da string), como se
-        // ainda houvesse uma inserção pela frente. O timer segue rodando.
-        state.finishing = true;
-        armWatchAfterSend();
-        setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
+      if (checkStopTextAndHaltAfterGeneration()) return;
+
+      const text = state.text;
+      state.lastSendAttemptAt = Date.now();
+      const sent = await sendMessage(text);
+      if (sent) {
+        state.remaining -= 1;
+        persistUiFields();
+        if (state.remaining <= 0) {
+          state.finishing = true;
+          armWatchAfterSend();
+          setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
+        } else {
+          armWatchAfterSend();
+          setStatus(`Enviado. Aguardando próxima resposta… (${restHtml()})`);
+        }
       } else {
-        armWatchAfterSend();
+        dlog('onGenerationEnded: envio falhou — reagendando (background?)', {
+          hidden: pageLikelyBackgrounded(),
+        });
+        state.phase = 'watch';
+        state.sawStreaming = true;
+        state.markerStableTicks = 0;
+        if (state.markerStableSince) state.markerStableSince = Date.now();
+        state.replyStableSince = 0;
+        state.stableTicks = 0;
         setStatus(
-          `Enviado. Aguardando próxima resposta… (${restHtml()})`
+          pageLikelyBackgrounded()
+            ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (${restHtml()})`
+            : `IA ainda gerando ou envio bloqueado. Aguardando e tentando de novo… (${restHtml()})`
         );
       }
-    } else {
-      // Não desarma: com o navegador minimizado/outra aba o focus() pode falhar.
-      // Mantém armado e reabre a janela de observação para tentar de novo.
-      dlog('onGenerationEnded: envio falhou — reagendando (background?)', {
-        hidden: pageLikelyBackgrounded(),
-      });
+    } catch (err) {
+      dlog('onGenerationEnded erro', err);
       state.phase = 'watch';
       state.sawStreaming = true;
-      // Força nova estabilização curta antes do próximo disparo.
-      state.markerStableTicks = 0;
-      if (state.markerStableSince) state.markerStableSince = Date.now();
-      state.replyStableSince = 0;
-      state.stableTicks = 0;
-      setStatus(
-        pageLikelyBackgrounded()
-          ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (${restHtml()})`
-          : `Falha ao enviar. Continuando a tentar… (${restHtml()})`
-      );
+    } finally {
+      state.pendingSend = false;
+      state.pendingSendSince = 0;
+      updateFab();
     }
-    state.pendingSend = false;
-    updateFab();
   }
 
   /**
@@ -1120,6 +1278,576 @@
     }
   }
 
+  // ─── NotebookLM: exclusão de notebooks não fixados ───────────────
+
+  /** Parseia textos protetores (separados por vírgula), sem vazios. */
+  function parseProtectTitles(raw) {
+    const src = typeof raw === 'string' ? raw : state.protectTitles;
+    return src
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  function notebookTitle(card) {
+    const el = card.querySelector('.project-button-title');
+    return (el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function isNotebookPinned(card) {
+    if (card.querySelector('.project-action-pin-icon')) return true;
+    const pin = card.querySelector(
+      '[aria-label*="fixado" i], [aria-label*="pinned" i], [mattooltip*="Fixado" i], [mattooltip*="Pinned" i]'
+    );
+    return !!pin;
+  }
+
+  function titleIsProtected(title, protectList) {
+    if (!title || !protectList.length) return false;
+    const lower = title.toLowerCase();
+    return protectList.some((p) => lower.includes(p.toLowerCase()));
+  }
+
+  /** Cards de notebook elegíveis para exclusão (não fixados e sem texto protetor). */
+  function findDeletableNotebooks(protectList, skipTitles) {
+    const skipped = skipTitles || new Set();
+    return Array.from(document.querySelectorAll('project-button.project-button')).filter(
+      (card) => {
+        if (card.closest('#cca-root')) return false;
+        if (card.dataset.ccaSkipDelete === '1') return false;
+        if (isNotebookPinned(card)) return false;
+        const title = notebookTitle(card);
+        if (!title) return false;
+        if (skipped.has(title.toLowerCase())) return false;
+        if (titleIsProtected(title, protectList)) return false;
+        const more = findNotebookMoreButton(card);
+        return !!more;
+      }
+    );
+  }
+
+  function findNotebookMoreButton(card) {
+    return (
+      card.querySelector('button.project-button-more') ||
+      card.querySelector(
+        'button[aria-label*="ações do projeto" i], button[aria-label*="Project Actions" i], button[aria-label*="More options" i], button[aria-label*="Mais opções" i]'
+      )
+    );
+  }
+
+  function menuItemLooksLikeDelete(el) {
+    const t = (
+      (el.getAttribute('aria-label') || '') +
+      ' ' +
+      (el.textContent || '')
+    )
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    if (!t) return false;
+    // Evita "Desafixar" / "Unpin" e itens de compartilhamento.
+    if (
+      /desafixar|unpin|renomear|rename|compartilh|share|abrir|open|mover|move|copiar|copy/.test(
+        t
+      )
+    ) {
+      return false;
+    }
+    // "Fixar"/"Pin" sozinhos não são exclusão.
+    if (/^(fixar|pin|unpin|keep)$/.test(t)) return false;
+    return /exclu|delete|apagar|remover notebook|delete notebook|remove notebook/.test(t);
+  }
+
+  function findOpenDeleteMenuItem() {
+    const items = Array.from(
+      document.querySelectorAll(
+        '[role="menuitem"], button.mat-mdc-menu-item, .mat-mdc-menu-item'
+      )
+    );
+    // Não exige visible() estrito: o painel do menu Angular às vezes reporta 0x0 no 1º frame.
+    return (
+      items.find((el) => {
+        if (!menuItemLooksLikeDelete(el)) return false;
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        return r.width > 0 || r.height > 0 || style.opacity !== '0';
+      }) || null
+    );
+  }
+
+  function buttonLabel(el) {
+    return (
+      (el.getAttribute('aria-label') || '') +
+      ' ' +
+      (el.innerText || el.textContent || '')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** Diálogo "Excluir o notebook de todos os lugares?" (não o menu ⋮). */
+  function findDeleteConfirmDialog() {
+    const nodes = Array.from(
+      document.querySelectorAll(
+        'mat-dialog-container, [role="dialog"], .mat-mdc-dialog-container'
+      )
+    );
+    for (const pane of document.querySelectorAll('.cdk-overlay-pane')) {
+      if (pane.querySelector('mat-dialog-container, [role="dialog"], .mat-mdc-dialog-container')) {
+        continue;
+      }
+      const t = (pane.innerText || '').toLowerCase();
+      if (
+        (/exclu|delete/.test(t) && /notebook/.test(t)) ||
+        /de todos os lugares|from all/.test(t)
+      ) {
+        nodes.push(pane);
+      }
+    }
+
+    for (const dlg of nodes) {
+      if (!visible(dlg) && (dlg.getBoundingClientRect?.().width || 0) <= 0) continue;
+      const t = (dlg.innerText || '').toLowerCase();
+      if (!t) continue;
+      if (
+        /exclu(ir)? o notebook|delete (the )?notebook|de todos os lugares|permanentemente exclu|permanently delete|from all (places|locations)/.test(
+          t
+        )
+      ) {
+        return dlg;
+      }
+      const labels = Array.from(dlg.querySelectorAll('button, [role="button"]')).map((b) =>
+        buttonLabel(b).toLowerCase()
+      );
+      if (
+        labels.some((l) => /^cancel(ar)?$/.test(l.trim())) &&
+        labels.some((l) => /^(delete|excluir)$/.test(l.trim()))
+      ) {
+        return dlg;
+      }
+    }
+    return null;
+  }
+
+  function findDeleteConfirmButton() {
+    const dlg = findDeleteConfirmDialog();
+    if (!dlg) return null;
+
+    const btns = Array.from(dlg.querySelectorAll('button, [role="button"]')).filter((b) => {
+      if (b.getAttribute('role') === 'menuitem') return false;
+      if (b.classList.contains('mat-mdc-menu-item')) return false;
+      if (b.closest('[role="menu"], .mat-mdc-menu-panel')) return false;
+      const r = b.getBoundingClientRect();
+      return r.width > 0 || r.height > 0 || visible(b);
+    });
+
+    const textOf = (b) =>
+      (b.innerText || b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+    const exact = btns.find((b) => {
+      const t = textOf(b);
+      return t === 'delete' || t === 'excluir';
+    });
+    if (exact) return exact;
+
+    const actions = dlg.querySelector(
+      'mat-dialog-actions, .mat-mdc-dialog-actions, [class*="dialog-actions"]'
+    );
+    if (actions) {
+      const actionBtns = Array.from(actions.querySelectorAll('button, [role="button"]'));
+      const primary = actionBtns.find((b) => {
+        const t = textOf(b);
+        return /delete|exclu|apagar/.test(t) && !/cancel|cancelar/.test(t);
+      });
+      if (primary) return primary;
+      if (actionBtns.length) return actionBtns[actionBtns.length - 1];
+    }
+
+    return (
+      btns.find((b) => {
+        const t = textOf(b);
+        if (/cancel|cancelar|fechar|close|manter|keep/.test(t)) return false;
+        return /delete|exclu|apagar/.test(t);
+      }) || null
+    );
+  }
+
+  function robustClick(el) {
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    } catch {
+      // ignore
+    }
+    try {
+      el.focus?.();
+    } catch {
+      // ignore
+    }
+    const opts = { bubbles: true, cancelable: true, view: window };
+    try {
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+      el.dispatchEvent(new MouseEvent('mousedown', opts));
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+      el.dispatchEvent(new MouseEvent('mouseup', opts));
+    } catch {
+      try {
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+      } catch {
+        // ignore
+      }
+    }
+    el.click();
+    return true;
+  }
+
+  async function waitFor(predicate, { timeoutMs = 4000, intervalMs = 120 } = {}) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!state.deletingNotebooks) return null;
+      const value = predicate();
+      if (value) return value;
+      await sleep(intervalMs);
+    }
+    return null;
+  }
+
+  /**
+   * Fecha menu/tooltip sem Escape: Escape quebra tooltips do Google
+   * (removeListeners) e trava exclusões seguintes.
+   */
+  function dismissOpenMenus() {
+    try {
+      const backdrop = document.querySelector(
+        '.cdk-overlay-backdrop, .mat-drawer-backdrop, .cdk-overlay-transparent-backdrop'
+      );
+      if (backdrop) {
+        backdrop.click();
+        return;
+      }
+      // Clique neutro fora dos cards (não no painel da extensão).
+      const root = document.getElementById('cca-root');
+      const target = document.querySelector('main, [role="main"], body');
+      if (target && (!root || !root.contains(target))) {
+        target.dispatchEvent(
+          new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Se um modal de exclusão ficou aberto, confirma antes de seguir. */
+  async function confirmPendingDeleteDialog() {
+    const btn = findDeleteConfirmButton();
+    if (!btn) return false;
+    dlog('confirmando modal de exclusão pendente', buttonLabel(btn));
+    robustClick(btn);
+    await waitFor(() => !findDeleteConfirmDialog(), { timeoutMs: 8000, intervalMs: 150 });
+    await sleep(600);
+    return !findDeleteConfirmDialog();
+  }
+
+  /** Após exclusão, a lista some por um instante no re-render — espera estabilizar. */
+  async function waitForDeletableList(protectList, skipTitles, { timeoutMs = 5000 } = {}) {
+    const start = Date.now();
+    let emptyStreak = 0;
+    while (Date.now() - start < timeoutMs) {
+      if (!state.deletingNotebooks) return [];
+      const list = findDeletableNotebooks(protectList, skipTitles);
+      if (list.length) return list;
+      emptyStreak += 1;
+      // Rola a grade para forçar cards virtuais a montarem.
+      if (emptyStreak === 3 || emptyStreak === 8) {
+        try {
+          window.scrollBy(0, 400);
+        } catch {
+          // ignore
+        }
+      }
+      if (emptyStreak === 12) {
+        try {
+          window.scrollTo(0, 0);
+        } catch {
+          // ignore
+        }
+      }
+      await sleep(250);
+    }
+    return findDeletableNotebooks(protectList, skipTitles);
+  }
+
+  async function deleteOneNotebook(card) {
+    const title = notebookTitle(card);
+
+    if (findDeleteConfirmDialog()) {
+      const confirmed = await confirmPendingDeleteDialog();
+      if (confirmed) return { ok: true, title, reason: 'modal pendente confirmado' };
+    }
+
+    const more = findNotebookMoreButton(card);
+    if (!more) return { ok: false, title, reason: 'menu não encontrado' };
+
+    try {
+      more.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    } catch {
+      // ignore
+    }
+    await sleep(250);
+    dismissOpenMenus();
+    await sleep(150);
+    robustClick(more);
+    await sleep(300);
+
+    const menuItem = await waitFor(findOpenDeleteMenuItem, {
+      timeoutMs: 5000,
+      intervalMs: 120,
+    });
+    if (!menuItem) {
+      dismissOpenMenus();
+      return { ok: false, title, reason: 'opção Excluir não apareceu' };
+    }
+    robustClick(menuItem);
+
+    const confirmBtn = await waitFor(findDeleteConfirmButton, {
+      timeoutMs: 10000,
+      intervalMs: 150,
+    });
+    if (!confirmBtn) {
+      dismissOpenMenus();
+      return { ok: false, title, reason: 'modal Delete não apareceu' };
+    }
+    dlog('clicando confirmar exclusão', buttonLabel(confirmBtn));
+    robustClick(confirmBtn);
+
+    let closed = await waitFor(() => !findDeleteConfirmDialog(), {
+      timeoutMs: 8000,
+      intervalMs: 150,
+    });
+    if (!closed && findDeleteConfirmDialog()) {
+      const retry = findDeleteConfirmButton();
+      if (retry) {
+        dlog('reintento Delete no modal');
+        robustClick(retry);
+      }
+      closed = await waitFor(() => !findDeleteConfirmDialog(), {
+        timeoutMs: 6000,
+        intervalMs: 150,
+      });
+    }
+
+    if (findDeleteConfirmDialog()) {
+      return { ok: false, title, reason: 'modal Delete ainda aberto' };
+    }
+
+    // Espera o card sumir / título sair da lista (re-render Angular).
+    await waitFor(
+      () => {
+        if (!document.contains(card)) return true;
+        const still = Array.from(
+          document.querySelectorAll('project-button.project-button .project-button-title')
+        ).some((el) => (el.textContent || '').replace(/\s+/g, ' ').trim() === title);
+        return !still;
+      },
+      { timeoutMs: 4000, intervalMs: 200 }
+    );
+    await sleep(700);
+    return { ok: true, title };
+  }
+
+  function updateDeleteButtons() {
+    const deleteBtn = rootEl?.querySelector('#cca-delete-notebooks');
+    const stopBtn = rootEl?.querySelector('#cca-stop-delete-notebooks');
+    if (deleteBtn) deleteBtn.disabled = !!state.deletingNotebooks;
+    if (stopBtn) stopBtn.disabled = !state.deletingNotebooks;
+  }
+
+  function stopDeleteNotebooks() {
+    if (!state.deletingNotebooks) {
+      setStatus('Nenhuma limpeza em andamento.');
+      return;
+    }
+    state.deletingNotebooks = false;
+    updateDeleteButtons();
+    disconnectArmedKeepalive();
+    dismissOpenMenus();
+    setStatus('Limpeza interrompida.');
+    dlog('limpeza: parada pelo usuário');
+  }
+
+  async function deleteUnpinnedNotebooks() {
+    if (!isNotebookLM()) {
+      setStatus('Esta opção só funciona na página inicial do NotebookLM.');
+      return;
+    }
+    if (state.deletingNotebooks) {
+      setStatus('Exclusão já em andamento…');
+      return;
+    }
+    if (state.armed) {
+      setStatus('Pare a execução automática antes de excluir notebooks.');
+      return;
+    }
+
+    persistUiFields();
+    const protectList = parseProtectTitles();
+    const skipTitles = new Set();
+    const preview = findDeletableNotebooks(protectList, skipTitles);
+    if (!preview.length) {
+      setStatus(
+        'Nenhum notebook elegível: todos estão fixados, protegidos pelo texto do título, ou não há cards.'
+      );
+      return;
+    }
+
+    const sample = preview
+      .slice(0, 5)
+      .map((c) => notebookTitle(c))
+      .join(' · ');
+    const ok = window.confirm(
+      `Excluir ${preview.length} notebook(s) não fixado(s)?\n\n` +
+        (protectList.length
+          ? `Protegidos (título contém): ${protectList.join(', ')}\n\n`
+          : '') +
+        `Exemplos: ${sample}${preview.length > 5 ? '…' : ''}`
+    );
+    if (!ok) {
+      setStatus('Exclusão cancelada.');
+      return;
+    }
+
+    state.deletingNotebooks = true;
+    // Keepalive do SW evita throttle de timers com a aba/navegador sem foco.
+    connectArmedKeepalive();
+    setNlmSectionOpen(true);
+    updateDeleteButtons();
+    updateFab();
+
+    let deleted = 0;
+    let failed = 0;
+    const failCounts = new Map(); // title -> tentativas
+    const maxPasses = Math.max(preview.length * 4, 100);
+    let passes = 0;
+    let consecutiveEmpty = 0;
+    let stoppedByUser = false;
+
+    try {
+      while (state.deletingNotebooks && passes < maxPasses) {
+        passes += 1;
+
+        try {
+          if (findDeleteConfirmDialog()) {
+            setStatus('Confirmando modal <strong>Delete</strong>…');
+            const confirmed = await confirmPendingDeleteDialog();
+            if (!state.deletingNotebooks) {
+              stoppedByUser = true;
+              break;
+            }
+            if (confirmed) {
+              deleted += 1;
+              consecutiveEmpty = 0;
+              await sleep(700);
+              continue;
+            }
+          }
+
+          if (!state.deletingNotebooks) {
+            stoppedByUser = true;
+            break;
+          }
+
+          const list = await waitForDeletableList(protectList, skipTitles, {
+            timeoutMs: consecutiveEmpty > 0 ? 4500 : 1200,
+          });
+          if (!state.deletingNotebooks) {
+            stoppedByUser = true;
+            break;
+          }
+          if (!list.length) {
+            consecutiveEmpty += 1;
+            // Só encerra após várias checagens vazias (evita parar no re-render).
+            if (consecutiveEmpty >= 3) {
+              dlog('lista vazia após estabilizar — fim', { deleted, failed, passes });
+              break;
+            }
+            setStatus('Aguardando a lista de notebooks atualizar…');
+            await sleep(800);
+            continue;
+          }
+          consecutiveEmpty = 0;
+
+          const card = list[0];
+          const title = notebookTitle(card);
+          setStatus(
+            `Excluindo <strong>${deleted + 1}</strong>… ` +
+              `"${escapeHtml(title.slice(0, 60))}"` +
+              ` · restam ~${list.length}`
+          );
+
+          const result = await deleteOneNotebook(card);
+          if (!state.deletingNotebooks) {
+            stoppedByUser = true;
+            break;
+          }
+          if (result.ok) {
+            deleted += 1;
+            failCounts.delete(title.toLowerCase());
+            dlog('notebook excluído', result.title);
+          } else {
+            const key = title.toLowerCase();
+            const n = (failCounts.get(key) || 0) + 1;
+            failCounts.set(key, n);
+            dlog('falha ao excluir notebook', result, `tentativa ${n}`);
+            if (n >= 3) {
+              failed += 1;
+              skipTitles.add(key);
+              card.dataset.ccaSkipDelete = '1';
+              setStatus(
+                `Pulando após 3 falhas: "${escapeHtml(title.slice(0, 50))}" (${escapeHtml(result.reason || '')})`
+              );
+            } else {
+              // Não marca skip permanente — tenta de novo depois.
+              dismissOpenMenus();
+              await sleep(600);
+            }
+          }
+          await sleep(600);
+        } catch (err) {
+          dlog('erro no loop de exclusão (continua)', err);
+          dismissOpenMenus();
+          await sleep(800);
+        }
+      }
+      if (!state.deletingNotebooks) stoppedByUser = true;
+    } finally {
+      state.deletingNotebooks = false;
+      updateDeleteButtons();
+      disconnectArmedKeepalive();
+      updateFab();
+    }
+
+    const left = findDeletableNotebooks(protectList, skipTitles).length;
+    if (stoppedByUser) {
+      setStatus(
+        `Limpeza interrompida: <strong>${deleted}</strong> excluído(s)` +
+          (failed ? `, ${failed} falha(s)` : '') +
+          (left ? `, ${left} ainda elegível(is)` : '') +
+          '.'
+      );
+    } else {
+      setStatus(
+        `Exclusão concluída: <strong>${deleted}</strong> excluído(s)` +
+          (failed ? `, ${failed} falha(s)` : '') +
+          (left ? `, ${left} ainda elegível(is)` : '') +
+          (passes >= maxPasses ? ' · limite de tentativas' : '') +
+          '.'
+      );
+    }
+  }
+
   // ─── UI ──────────────────────────────────────────────────────────
 
   function setStatus(html) {
@@ -1139,6 +1867,7 @@
     state.finishing = false;
     state.phase = 'idle';
     state.pendingSend = false;
+    state.pendingSendSince = 0;
     state.stopTextBaseline = null;
     disconnectArmedKeepalive();
     stopTimer();
@@ -1232,12 +1961,14 @@
 
   function updateFab() {
     if (!fabEl) return;
-    fabEl.dataset.active = state.armed ? '1' : '0';
-    fabEl.title = state.armed
-      ? state.finishing
-        ? 'Ativo — aguardando última resposta'
-        : `Ativo — restam ${state.remaining}`
-      : 'Chat Continue Auto';
+    fabEl.dataset.active = state.armed || state.deletingNotebooks ? '1' : '0';
+    fabEl.title = state.deletingNotebooks
+      ? 'Limpeza de notebooks em andamento'
+      : state.armed
+        ? state.finishing
+          ? 'Ativo — aguardando última resposta'
+          : `Ativo — restam ${state.remaining}`
+        : 'Chat Continue Auto';
   }
 
   function persistUiFields() {
@@ -1247,12 +1978,14 @@
     const minEl = rootEl?.querySelector('#cca-min');
     const maxEl = rootEl?.querySelector('#cca-max');
     const stopEl = rootEl?.querySelector('#cca-stop-text');
+    const protectEl = rootEl?.querySelector('#cca-protect-titles');
     if (textEl) state.text = textEl.value;
     if (timesEl) state.times = Math.max(1, parseInt(timesEl.value, 10) || 1);
     if (markerEl) state.marker = markerEl.value;
     if (minEl) state.minNew = Math.max(1, parseInt(minEl.value, 10) || 1);
     if (maxEl) state.maxTotal = Math.max(0, parseInt(maxEl.value, 10) || 0);
     if (stopEl) state.stopText = stopEl.value;
+    if (protectEl) state.protectTitles = protectEl.value;
     try {
       chrome.storage.local.set({
         [STORAGE_KEY]: {
@@ -1262,6 +1995,8 @@
           minNew: state.minNew,
           maxTotal: state.maxTotal,
           stopText: state.stopText,
+          protectTitles: state.protectTitles,
+          nlmSectionOpen: state.nlmSectionOpen,
         },
       });
     } catch {
@@ -1269,43 +2004,66 @@
     }
   }
 
+  function setNlmSectionOpen(open) {
+    state.nlmSectionOpen = !!open;
+    const section = rootEl?.querySelector('#cca-nlm-section');
+    if (section) section.dataset.open = state.nlmSectionOpen ? '1' : '0';
+    const toggle = rootEl?.querySelector('#cca-nlm-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', state.nlmSectionOpen ? 'true' : 'false');
+    }
+    persistUiFields();
+  }
+
+  function toggleNlmSection() {
+    setNlmSectionOpen(!state.nlmSectionOpen);
+  }
+
   async function sendFirstNow(total) {
     state.pendingSend = true;
+    state.pendingSendSince = Date.now();
     state.lastSendAttemptAt = Date.now();
     setStatus(`Chat parado — enviando agora… (restam <strong>${total}</strong>)`);
-    const sent = await sendMessage(state.text);
-    if (sent) {
-      state.remaining -= 1;
-      if (state.remaining <= 0) {
-        // Última inserção enviada: aguarda a IA terminar esta resposta antes
-        // de encerrar (timer e contagens seguem rodando).
-        state.finishing = true;
-        armWatchAfterSend();
-        setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
+    try {
+      const sent = await sendMessage(state.text);
+      if (sent) {
+        state.remaining -= 1;
+        if (state.remaining <= 0) {
+          state.finishing = true;
+          armWatchAfterSend();
+          setStatus('Última inserção enviada. Aguardando a IA terminar a resposta…');
+        } else {
+          armWatchAfterSend();
+          setStatus(`Enviado. Aguardando a IA terminar… (${restHtml()})`);
+        }
       } else {
-        armWatchAfterSend();
+        dlog('sendFirstNow: falhou — reagendando', { hidden: pageLikelyBackgrounded() });
+        state.phase = 'watch';
+        state.sawStreaming = true;
+        state.lastSendAt = Date.now() - 5000;
+        resetMarkerCounters();
         setStatus(
-          `Enviado. Aguardando a IA terminar… (${restHtml()})`
+          pageLikelyBackgrounded()
+            ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (restam <strong>${total}</strong>)`
+            : `IA ainda gerando ou envio bloqueado. Continuando a tentar… (restam <strong>${total}</strong>)`
         );
       }
-    } else {
-      // Mantém armado e tenta de novo via tick (útil com navegador minimizado).
-      dlog('sendFirstNow: falhou — reagendando', { hidden: pageLikelyBackgrounded() });
+    } catch (err) {
+      dlog('sendFirstNow erro', err);
       state.phase = 'watch';
-      state.sawStreaming = false;
-      state.lastSendAt = Date.now() - 5000;
-      resetMarkerCounters();
-      setStatus(
-        pageLikelyBackgrounded()
-          ? `Falha ao enviar (navegador em segundo plano). Continuando a tentar… (restam <strong>${total}</strong>)`
-          : `Falha ao enviar. Continuando a tentar… (restam <strong>${total}</strong>)`
-      );
+      state.sawStreaming = true;
+    } finally {
+      state.pendingSend = false;
+      state.pendingSendSince = 0;
+      updateFab();
     }
-    state.pendingSend = false;
-    updateFab();
   }
 
   function start() {
+    if (state.deletingNotebooks) {
+      setStatus('Pare a limpeza de notebooks antes de iniciar.');
+      return;
+    }
     persistUiFields();
     const timesEl = rootEl.querySelector('#cca-times');
     const n = Math.max(1, parseInt(timesEl.value, 10) || 1);
@@ -1353,6 +2111,7 @@
     state.finishing = false;
     state.remaining = 0;
     state.pendingSend = false;
+    state.pendingSendSince = 0;
     state.phase = 'idle';
     state.sawStreaming = false;
     state.stopTextBaseline = null;
@@ -1413,6 +2172,28 @@
         <input id="cca-stop-text" type="text" spellcheck="false"
           placeholder="ex.: COMANDO FINALIZADO"
           title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios." />
+        <div id="cca-nlm-section" style="display:none" data-open="0">
+          <hr class="cca-sep" />
+          <button type="button" id="cca-nlm-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-nlm-body" title="Mostrar ou ocultar opções de limpeza do NotebookLM">
+            <span class="cca-collapse-chevron" aria-hidden="true">▸</span>
+            <span>NotebookLM — limpeza</span>
+          </button>
+          <div id="cca-nlm-body" class="cca-collapse-body" role="region" aria-labelledby="cca-nlm-toggle">
+            <label for="cca-protect-titles" title="Textos separados por vírgula. Se o título do notebook contiver qualquer um deles, ele não será excluído.">Não excluir se o título contiver (vírgula) <span class="cca-info" title="Textos separados por vírgula. Se o título do notebook contiver qualquer um deles, ele não será excluído.">ⓘ</span></label>
+            <input id="cca-protect-titles" type="text" spellcheck="false"
+              placeholder="ex.: PETRO, RES-, Guia Mestre"
+              title="Textos separados por vírgula. Se o título do notebook contiver qualquer um deles, ele não será excluído." />
+            <div class="cca-nlm-actions">
+              <button type="button" id="cca-delete-notebooks" title="Abre o menu ⋮ de cada notebook não fixado e exclui. Notebooks fixados e os que contêm os textos acima no título são preservados.">Excluir notebooks não fixados</button>
+              <button type="button" id="cca-stop-delete-notebooks" disabled title="Interrompe a limpeza em andamento.">Parar limpeza</button>
+            </div>
+            <p class="cca-nlm-hint">
+              Preserva notebooks fixados (ícone de alfinete) e os cujo título
+              contenha qualquer texto do campo acima. Use na página inicial
+              do NotebookLM. Continua mesmo com o navegador em segundo plano.
+            </p>
+          </div>
+        </div>
         <div id="cca-status">Configure e clique em Iniciar.</div>
         <div id="cca-count"></div>
         <div id="cca-timer" style="display:none"></div>
@@ -1442,6 +2223,8 @@
     const minEl = rootEl.querySelector('#cca-min');
     const maxEl = rootEl.querySelector('#cca-max');
     const stopEl = rootEl.querySelector('#cca-stop-text');
+    const protectEl = rootEl.querySelector('#cca-protect-titles');
+    const nlmSection = rootEl.querySelector('#cca-nlm-section');
 
     textEl.value = state.text;
     timesEl.value = String(state.times);
@@ -1449,6 +2232,11 @@
     minEl.value = String(state.minNew);
     maxEl.value = String(state.maxTotal);
     stopEl.value = state.stopText;
+    if (protectEl) protectEl.value = state.protectTitles;
+    if (nlmSection) {
+      nlmSection.style.display = isNotebookLM() ? '' : 'none';
+      nlmSection.dataset.open = state.nlmSectionOpen ? '1' : '0';
+    }
 
     fabEl.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1457,7 +2245,33 @@
     });
     rootEl.querySelector('#cca-start').addEventListener('click', start);
     rootEl.querySelector('#cca-stop').addEventListener('click', stop);
-    for (const el of [textEl, timesEl, markerEl, minEl, maxEl, stopEl]) {
+    const nlmToggle = rootEl.querySelector('#cca-nlm-toggle');
+    if (nlmToggle) {
+      nlmToggle.setAttribute('aria-expanded', state.nlmSectionOpen ? 'true' : 'false');
+      nlmToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleNlmSection();
+      });
+    }
+    const deleteNotebooksBtn = rootEl.querySelector('#cca-delete-notebooks');
+    if (deleteNotebooksBtn) {
+      deleteNotebooksBtn.addEventListener('click', () => {
+        void deleteUnpinnedNotebooks();
+      });
+    }
+    const stopDeleteBtn = rootEl.querySelector('#cca-stop-delete-notebooks');
+    if (stopDeleteBtn) {
+      stopDeleteBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        stopDeleteNotebooks();
+      });
+    }
+    updateDeleteButtons();
+    const persistEls = [textEl, timesEl, markerEl, minEl, maxEl, stopEl];
+    if (protectEl) persistEls.push(protectEl);
+    for (const el of persistEls) {
       el.addEventListener('input', persistUiFields);
       el.addEventListener('change', persistUiFields);
     }
@@ -1485,6 +2299,10 @@
             : DEFAULTS.maxTotal;
         state.stopText =
           typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
+        state.protectTitles =
+          typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
+        state.nlmSectionOpen =
+          typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
         cb();
       });
     } catch {
@@ -1518,8 +2336,9 @@
   // Ao voltar o foco/visibilidade, dispara um tick imediato (útil após minimizar).
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    if (!state.armed) return;
+    if (!state.armed && !state.deletingNotebooks) return;
     dlog('visibility: aba visível de novo — tick imediato');
+    if (!armedPort) connectArmedKeepalive();
     runHeartbeat();
   });
 
