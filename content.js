@@ -9,8 +9,13 @@
   window.__CCA_LOADED__ = true;
 
   const STORAGE_KEY = 'cca_settings';
+  const DEFAULT_SAVED_TEXTS = [
+    'Execute o comando.',
+    'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
+  ];
   const DEFAULTS = {
-    text: 'execute o comando',
+    text: DEFAULT_SAVED_TEXTS[0],
+    savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** String que identifica texto de resposta da IA (modo contagem). */
     marker: '=ff=',
@@ -29,7 +34,7 @@
     nlmSectionOpen: false,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
-  const LEGACY_DEFAULT_TEXT = 'continue';
+  const LEGACY_DEFAULT_TEXTS = new Set(['continue', 'execute o comando']);
   const LEGACY_DEFAULT_TIMES = 4;
   const LEGACY_DEFAULT_MAX_TOTAL = 0;
 
@@ -56,6 +61,8 @@
     armed: false,
     remaining: 0,
     text: DEFAULTS.text,
+    /** Biblioteca de mensagens que podem ser selecionadas no campo principal. */
+    savedTexts: [...DEFAULTS.savedTexts],
     times: DEFAULTS.times,
     /** idle | watch | streaming */
     phase: 'idle',
@@ -143,6 +150,17 @@
       (c) =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
     );
+  }
+
+  function normalizeSavedTexts(value) {
+    if (!Array.isArray(value)) return [];
+    const unique = new Set();
+    for (const item of value) {
+      if (typeof item !== 'string') continue;
+      const text = item.trim();
+      if (text) unique.add(text);
+    }
+    return [...unique];
   }
 
   // ─── Detecção por site ───────────────────────────────────────────
@@ -1990,6 +2008,7 @@
       chrome.storage.local.set({
         [STORAGE_KEY]: {
           text: state.text,
+          savedTexts: state.savedTexts,
           times: state.times,
           marker: state.marker,
           minNew: state.minNew,
@@ -2002,6 +2021,105 @@
     } catch {
       // storage indisponível
     }
+  }
+
+  function updateSaveTextButton() {
+    const textEl = rootEl?.querySelector('#cca-text');
+    const saveBtn = rootEl?.querySelector('#cca-save-text');
+    if (!textEl || !saveBtn) return;
+    const text = textEl.value.trim();
+    const alreadySaved = !!text && state.savedTexts.includes(text);
+    saveBtn.disabled = !text || alreadySaved;
+    saveBtn.textContent = alreadySaved ? 'Já salvo' : 'Salvar texto atual';
+    saveBtn.title = !text
+      ? 'Digite um texto antes de salvar.'
+      : alreadySaved
+        ? 'Este texto já está salvo.'
+        : 'Adicionar o texto atual à lista de textos salvos.';
+  }
+
+  function renderSavedTexts() {
+    const listEl = rootEl?.querySelector('#cca-saved-text-list');
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    if (state.savedTexts.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'cca-saved-empty';
+      empty.textContent = 'Nenhum texto salvo.';
+      listEl.appendChild(empty);
+      updateSaveTextButton();
+      return;
+    }
+
+    state.savedTexts.forEach((text, index) => {
+      const row = document.createElement('div');
+      row.className = 'cca-saved-row';
+      row.setAttribute('role', 'listitem');
+
+      const selectBtn = document.createElement('button');
+      selectBtn.type = 'button';
+      selectBtn.className = 'cca-saved-select';
+      selectBtn.dataset.savedTextIndex = String(index);
+      selectBtn.title = 'Usar este texto';
+      selectBtn.textContent = text;
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'cca-saved-delete';
+      deleteBtn.dataset.deleteSavedTextIndex = String(index);
+      deleteBtn.setAttribute('aria-label', `Excluir texto salvo ${index + 1}`);
+      deleteBtn.title = 'Excluir este texto salvo';
+      deleteBtn.textContent = '×';
+
+      row.append(selectBtn, deleteBtn);
+      listEl.appendChild(row);
+    });
+    updateSaveTextButton();
+  }
+
+  function setSavedTextsOpen(open) {
+    const dropdown = rootEl?.querySelector('#cca-saved-dropdown');
+    const textEl = rootEl?.querySelector('#cca-text');
+    if (!dropdown || !textEl) return;
+    if (open) renderSavedTexts();
+    dropdown.dataset.open = open ? '1' : '0';
+    textEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function saveCurrentText() {
+    const textEl = rootEl?.querySelector('#cca-text');
+    if (!textEl) return;
+    const text = textEl.value.trim();
+    if (!text || state.savedTexts.includes(text)) {
+      updateSaveTextButton();
+      return;
+    }
+    textEl.value = text;
+    state.text = text;
+    state.savedTexts.unshift(text);
+    persistUiFields();
+    renderSavedTexts();
+  }
+
+  function selectSavedText(index) {
+    const text = state.savedTexts[index];
+    const textEl = rootEl?.querySelector('#cca-text');
+    if (typeof text !== 'string' || !textEl) return;
+    textEl.value = text;
+    state.text = text;
+    persistUiFields();
+    updateSaveTextButton();
+    textEl.focus();
+    textEl.setSelectionRange(text.length, text.length);
+    setSavedTextsOpen(false);
+  }
+
+  function deleteSavedText(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= state.savedTexts.length) return;
+    state.savedTexts.splice(index, 1);
+    persistUiFields();
+    renderSavedTexts();
   }
 
   function setNlmSectionOpen(open) {
@@ -2126,6 +2244,7 @@
     state.panelOpen = !!open;
     const panel = rootEl.querySelector('#cca-panel');
     if (panel) panel.dataset.open = state.panelOpen ? '1' : '0';
+    if (!state.panelOpen) setSavedTextsOpen(false);
   }
 
   function togglePanel() {
@@ -2151,7 +2270,18 @@
       <div id="cca-panel" data-open="0">
         <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
         <label for="cca-text" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">Texto a inserir após a IA terminar <span class="cca-info" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">ⓘ</span></label>
-        <textarea id="cca-text" spellcheck="false" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta."></textarea>
+        <div id="cca-text-picker">
+          <textarea id="cca-text" spellcheck="false"
+            aria-haspopup="dialog" aria-expanded="false" aria-controls="cca-saved-dropdown"
+            title="Clique para escolher um texto salvo ou digite um novo."></textarea>
+          <div id="cca-saved-dropdown" data-open="0" role="dialog" aria-label="Textos salvos">
+            <div class="cca-saved-header">
+              <strong>Textos salvos</strong>
+              <button type="button" id="cca-save-text">Salvar texto atual</button>
+            </div>
+            <div id="cca-saved-text-list" role="list"></div>
+          </div>
+        </div>
         <label for="cca-marker" title="Texto/marcador esperado na resposta da IA para contar novas ocorrências (ex.: =ff=). Deixe em branco para modo automático.">String de resposta da IA (modo contagem) <span class="cca-info" title="Texto/marcador esperado na resposta da IA para contar novas ocorrências (ex.: =ff=). Deixe em branco para modo automático.">ⓘ</span></label>
         <input id="cca-marker" type="text" spellcheck="false"
           placeholder='ex.: uma string que aparece nas respostas'
@@ -2237,6 +2367,45 @@
       nlmSection.style.display = isNotebookLM() ? '' : 'none';
       nlmSection.dataset.open = state.nlmSectionOpen ? '1' : '0';
     }
+    renderSavedTexts();
+
+    textEl.addEventListener('focus', () => setSavedTextsOpen(true));
+    textEl.addEventListener('click', () => setSavedTextsOpen(true));
+    textEl.addEventListener('input', () => {
+      updateSaveTextButton();
+      const dropdown = rootEl?.querySelector('#cca-saved-dropdown');
+      if (dropdown?.dataset.open !== '1') setSavedTextsOpen(true);
+    });
+    textEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setSavedTextsOpen(false);
+    });
+
+    rootEl.querySelector('#cca-save-text').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      saveCurrentText();
+    });
+    rootEl.querySelector('#cca-saved-text-list').addEventListener('click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const deleteBtn = target?.closest('[data-delete-saved-text-index]');
+      if (deleteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        deleteSavedText(Number(deleteBtn.dataset.deleteSavedTextIndex));
+        return;
+      }
+      const selectBtn = target?.closest('[data-saved-text-index]');
+      if (!selectBtn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectSavedText(Number(selectBtn.dataset.savedTextIndex));
+    });
+    document.addEventListener('pointerdown', (e) => {
+      const picker = rootEl?.querySelector('#cca-text-picker');
+      if (picker && !picker.contains(e.target)) setSavedTextsOpen(false);
+    });
 
     fabEl.addEventListener('click', (e) => {
       e.preventDefault();
@@ -2283,8 +2452,11 @@
         const s = data?.[STORAGE_KEY] || {};
         const saved = typeof s.text === 'string' ? s.text : '';
         // Mantém texto personalizado; migra só o default antigo.
-        if (saved && saved !== LEGACY_DEFAULT_TEXT) state.text = saved;
+        if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
         else state.text = DEFAULTS.text;
+        state.savedTexts = Array.isArray(s.savedTexts)
+          ? normalizeSavedTexts(s.savedTexts)
+          : [...DEFAULTS.savedTexts];
         state.times =
           Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
             ? s.times
