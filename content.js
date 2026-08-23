@@ -15,14 +15,14 @@
   ];
   const DEFAULT_MARKER_MAX = {
     '=ff=': 100,
-    '### item': 0,
+    'assunto:': 0,
   };
   const DEFAULTS = {
     text: DEFAULT_SAVED_TEXTS[0],
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
-    marker: '=ff=;### Item',
+    marker: '=ff=;Assunto:',
     /** Mínimo de ocorrências de uma das strings aceitas na última resposta. */
     minNew: 1,
     /** Limite máximo individual por string aceita na página (0 = sem limite). */
@@ -39,7 +39,13 @@
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXTS = new Set(['continue', 'execute o comando']);
-  const LEGACY_DEFAULT_MARKERS = new Set(['=ff=', '=ff=; blueprint', '=ff=; **Item']);
+  const LEGACY_DEFAULT_MARKERS = new Set([
+    '=ff=',
+    '=ff=; blueprint',
+    '=ff=; **Item',
+    '=ff=;### Item',
+    '=ff=; ### Item',
+  ]);
   const LEGACY_DEFAULT_TIMES = 4;
   const LEGACY_DEFAULT_MAX_TOTAL = 0;
 
@@ -518,7 +524,7 @@
       return Math.max(0, state.markerMax[key]);
     }
     if (key === '=ff=') return 100;
-    if (key === '### item') return 0;
+    if (key === 'assunto:') return 0;
     return 0;
   }
 
@@ -2788,8 +2794,8 @@
         </div>
         <label for="cca-marker" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">Strings aceitas na resposta (separe com ;) <span class="cca-info" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">ⓘ</span></label>
         <input id="cca-marker" type="text" spellcheck="false"
-          placeholder="=ff=; ### Item; outra string"
-          title="Exemplo: =ff=; ### Item. A comparação ignora maiúsculas/minúsculas." />
+          placeholder="=ff=; Assunto:; outra string"
+          title="Exemplo: =ff=; Assunto:. A comparação ignora maiúsculas/minúsculas." />
         <div id="cca-marker-max-container">
           <label title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">ⓘ</span></label>
           <div id="cca-marker-max-list" class="cca-marker-max-list"></div>
@@ -2840,7 +2846,7 @@
         <p id="cca-hint">
           A extensão sempre aguarda a IA terminar. Com a lista preenchida, o
           próximo envio só é liberado se a resposta concluída contiver pelo menos
-          uma das strings (ex.: “=ff=” ou “### Item”), respeitando o mínimo.
+          uma das strings (ex.: “=ff=” ou “Assunto:”), respeitando o mínimo.
           Separe alternativas com ponto e vírgula; deixe vazio para não exigir
           string. O texto de parada também só é verificado após a resposta terminar.
         </p>
