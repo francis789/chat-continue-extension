@@ -243,6 +243,51 @@
   color: #6e7681;
 }
 
+#cca-marker-max-container {
+  margin-top: 2px;
+}
+
+#cca-marker-max-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cca-marker-max-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cca-marker-max-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #e6edf3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.cca-marker-max-input {
+  width: 85px !important;
+  flex: 0 0 85px;
+  text-align: right;
+}
+
+.cca-marker-max-empty {
+  font-size: 11px;
+  color: #6e7681;
+  font-style: italic;
+  padding: 4px 0;
+}
+
 #cca-row {
   display: flex;
   gap: 8px;

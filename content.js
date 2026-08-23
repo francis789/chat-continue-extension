@@ -13,16 +13,20 @@
     'Execute o comando.',
     'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
   ];
+  const DEFAULT_MARKER_MAX = {
+    '=ff=': 100,
+    '### item': 0,
+  };
   const DEFAULTS = {
     text: DEFAULT_SAVED_TEXTS[0],
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
-    marker: '=ff=; **Item',
+    marker: '=ff=;### Item',
     /** Mínimo de ocorrências de uma das strings aceitas na última resposta. */
     minNew: 1,
-    /** Máximo TOTAL somado das strings na página — ao atingir, para (0 = sem limite). */
-    maxTotal: 100,
+    /** Limite máximo individual por string aceita na página (0 = sem limite). */
+    markerMax: { ...DEFAULT_MARKER_MAX },
     /** Texto que encerra as inserções após concluir a resposta da IA. */
     stopText: 'COMANDO FINALIZADO',
     /**
@@ -35,7 +39,7 @@
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXTS = new Set(['continue', 'execute o comando']);
-  const LEGACY_DEFAULT_MARKERS = new Set(['=ff=', '=ff=; blueprint']);
+  const LEGACY_DEFAULT_MARKERS = new Set(['=ff=', '=ff=; blueprint', '=ff=; **Item']);
   const LEGACY_DEFAULT_TIMES = 4;
   const LEGACY_DEFAULT_MAX_TOTAL = 0;
 
@@ -93,7 +97,8 @@
     /** Lista de strings aceitas na resposta, separadas por ponto e vírgula. */
     marker: DEFAULTS.marker,
     minNew: DEFAULTS.minNew,
-    maxTotal: DEFAULTS.maxTotal,
+    /** Limite máximo individual por string aceita na página (0 = sem limite). */
+    markerMax: { ...DEFAULTS.markerMax },
     /** Texto de parada: encerra somente após a resposta da IA terminar. */
     stopText: DEFAULTS.stopText,
     /** Contagem do texto de parada no Iniciar (null = ainda não registrada). */
@@ -503,7 +508,37 @@
   }
 
   function markerKey(marker) {
-    return String(marker || '').toLocaleLowerCase();
+    return String(marker || '').trim().toLocaleLowerCase();
+  }
+
+  function getMarkerMax(marker) {
+    const key = markerKey(marker);
+    if (!key) return 0;
+    if (state.markerMax && Number.isFinite(state.markerMax[key])) {
+      return Math.max(0, state.markerMax[key]);
+    }
+    if (key === '=ff=') return 100;
+    if (key === '### item') return 0;
+    return 0;
+  }
+
+  function checkMarkerMaxExceeded(details = countMarkerDetails()) {
+    if (!details?.items?.length) return null;
+    const exceeded = [];
+    for (const item of details.items) {
+      const max = getMarkerMax(item.marker);
+      if (max >= 1 && item.count >= max) {
+        exceeded.push({ marker: item.marker, count: item.count, max });
+      }
+    }
+    return exceeded.length ? exceeded : null;
+  }
+
+  function formatExceededMessage(exceededList) {
+    if (!Array.isArray(exceededList) || !exceededList.length) return '';
+    return exceededList
+      .map((item) => `<strong>${escapeHtml(item.marker)}</strong> (${item.count}/${item.max})`)
+      .join(', ');
   }
 
   function markerCountMap(items = []) {
@@ -1435,16 +1470,17 @@
       }
 
       if (markerActive() && state.markerBaseline !== null) {
-        const c = countMarker();
-        if (state.maxTotal >= 1 && c >= state.maxTotal) {
-          dlog('marcador: máximo total atingido antes do envio', { c, max: state.maxTotal });
+        const exceeded = checkMarkerMaxExceeded();
+        if (exceeded) {
+          dlog('marcador: máximo atingido antes do envio', exceeded);
           stop();
           setStatus(
-            `⚠️ <strong>Limite máximo atingido</strong>: ${c}/${state.maxTotal} ` +
-              `ocorrências das strings aceitas na página. Execução parada.`
+            `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
+              `ocorrências na página. Execução parada.`
           );
           return;
         }
+        const c = countMarker();
         if (c > state.markerLast) {
           state.markerLast = c;
           state.markerStableTicks = 0;
@@ -1513,13 +1549,14 @@
     const currentDetails = countMarkerDetails();
     const current = currentDetails.total;
 
-    // Limite máximo TOTAL na página: ao atingir, para tudo com aviso.
-    if (state.maxTotal >= 1 && current >= state.maxTotal) {
-      dlog('marcador: máximo total atingido', { current, max: state.maxTotal });
+    // Limite máximo individual por string na página: ao atingir qualquer um, para tudo com aviso.
+    const exceeded = checkMarkerMaxExceeded(currentDetails);
+    if (exceeded) {
+      dlog('marcador: máximo atingido', exceeded);
       stop();
       setStatus(
-        `⚠️ <strong>Limite máximo atingido</strong>: ${current}/${state.maxTotal} ` +
-          `ocorrências das strings aceitas na página. Execução parada.`
+        `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
+          `ocorrências na página. Execução parada.`
       );
       return true;
     }
@@ -2368,9 +2405,11 @@
     if (!state.panelOpen) return;
     const details = countMarkerDetails();
     let txt = details.items
-      .map((item) => `${item.marker}: ${item.count}`)
+      .map((item) => {
+        const max = getMarkerMax(item.marker);
+        return max >= 1 ? `${item.marker}: ${item.count}/${max}` : `${item.marker}: ${item.count}`;
+      })
       .join(' · ');
-    if (state.maxTotal >= 1) txt += ` · total ${details.total}/${state.maxTotal}`;
     if (state.armed && state.markerBaseline !== null) {
       txt += ` · novas: ${Math.max(0, state.markerLast - state.markerBaseline)}`;
     }
@@ -2395,16 +2434,25 @@
     const timesEl = rootEl?.querySelector('#cca-times');
     const markerEl = rootEl?.querySelector('#cca-marker');
     const minEl = rootEl?.querySelector('#cca-min');
-    const maxEl = rootEl?.querySelector('#cca-max');
     const stopEl = rootEl?.querySelector('#cca-stop-text');
     const protectEl = rootEl?.querySelector('#cca-protect-titles');
     if (textEl) state.text = textEl.value;
     if (timesEl) state.times = Math.max(1, parseInt(timesEl.value, 10) || 1);
     if (markerEl) state.marker = markerEl.value;
     if (minEl) state.minNew = Math.max(1, parseInt(minEl.value, 10) || 1);
-    if (maxEl) state.maxTotal = Math.max(0, parseInt(maxEl.value, 10) || 0);
     if (stopEl) state.stopText = stopEl.value;
     if (protectEl) state.protectTitles = protectEl.value;
+
+    if (rootEl) {
+      const maxInputs = rootEl.querySelectorAll('.cca-marker-max-input');
+      for (const input of maxInputs) {
+        const key = input.dataset.markerKey;
+        if (key) {
+          state.markerMax[key] = Math.max(0, parseInt(input.value, 10) || 0);
+        }
+      }
+    }
+
     try {
       chrome.storage.local.set({
         [STORAGE_KEY]: {
@@ -2413,7 +2461,7 @@
           times: state.times,
           marker: state.marker,
           minNew: state.minNew,
-          maxTotal: state.maxTotal,
+          markerMax: state.markerMax,
           stopText: state.stopText,
           protectTitles: state.protectTitles,
           nlmSectionOpen: state.nlmSectionOpen,
@@ -2521,6 +2569,55 @@
     state.savedTexts.splice(index, 1);
     persistUiFields();
     renderSavedTexts();
+  }
+
+  function renderMarkerMaxInputs() {
+    const listEl = rootEl?.querySelector('#cca-marker-max-list');
+    if (!listEl) return;
+    const markerEl = rootEl?.querySelector('#cca-marker');
+    const markers = parseMarkerStrings(markerEl ? markerEl.value : state.marker);
+
+    listEl.replaceChildren();
+
+    if (markers.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cca-marker-max-empty';
+      empty.textContent = 'Nenhuma string informada acima.';
+      listEl.appendChild(empty);
+      return;
+    }
+
+    for (const marker of markers) {
+      const key = markerKey(marker);
+      const row = document.createElement('div');
+      row.className = 'cca-marker-max-row';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'cca-marker-max-name';
+      nameSpan.title = marker;
+      nameSpan.textContent = marker;
+
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '9999';
+      input.step = '1';
+      input.className = 'cca-marker-max-input';
+      input.dataset.markerKey = key;
+      input.value = String(getMarkerMax(marker));
+      input.title = `Limite máximo para "${marker}" (0 = sem limite)`;
+
+      const handleMaxChange = () => {
+        state.markerMax[key] = Math.max(0, parseInt(input.value, 10) || 0);
+        persistUiFields();
+        updateCountLine();
+      };
+      input.addEventListener('input', handleMaxChange);
+      input.addEventListener('change', handleMaxChange);
+
+      row.append(nameSpan, input);
+      listEl.appendChild(row);
+    }
   }
 
   function setNlmSectionOpen(open) {
@@ -2691,8 +2788,12 @@
         </div>
         <label for="cca-marker" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">Strings aceitas na resposta (separe com ;) <span class="cca-info" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">ⓘ</span></label>
         <input id="cca-marker" type="text" spellcheck="false"
-          placeholder="=ff=; **Item; outra string"
-          title="Exemplo: =ff=; **Item. A comparação ignora maiúsculas/minúsculas." />
+          placeholder="=ff=; ### Item; outra string"
+          title="Exemplo: =ff=; ### Item. A comparação ignora maiúsculas/minúsculas." />
+        <div id="cca-marker-max-container">
+          <label title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">ⓘ</span></label>
+          <div id="cca-marker-max-list" class="cca-marker-max-list"></div>
+        </div>
         <div id="cca-row">
           <div>
             <label for="cca-times" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">Quantas vezes <span class="cca-info" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">ⓘ</span></label>
@@ -2703,8 +2804,6 @@
             <input id="cca-min" type="number" min="1" max="999" step="1" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta." />
           </div>
         </div>
-        <label for="cca-max" title="Limite máximo da soma de todas as strings aceitas na página. Ao atingir, interrompe as inserções (0 = sem limite).">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo da soma de todas as strings aceitas na página. Ao atingir, interrompe as inserções (0 = sem limite).">ⓘ</span></label>
-        <input id="cca-max" type="number" min="0" max="9999" step="1" title="Limite máximo da soma de todas as strings aceitas na página (padrão: 100; 0 = sem limite)." />
         <label for="cca-stop-text" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">Texto de parada (verificado após a resposta terminar) <span class="cca-info" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">ⓘ</span></label>
         <input id="cca-stop-text" type="text" spellcheck="false"
           placeholder="ex.: COMANDO FINALIZADO"
@@ -2741,7 +2840,7 @@
         <p id="cca-hint">
           A extensão sempre aguarda a IA terminar. Com a lista preenchida, o
           próximo envio só é liberado se a resposta concluída contiver pelo menos
-          uma das strings (ex.: “=ff=” ou “**Item”), respeitando o mínimo.
+          uma das strings (ex.: “=ff=” ou “### Item”), respeitando o mínimo.
           Separe alternativas com ponto e vírgula; deixe vazio para não exigir
           string. O texto de parada também só é verificado após a resposta terminar.
         </p>
@@ -2758,7 +2857,6 @@
     const timesEl = rootEl.querySelector('#cca-times');
     const markerEl = rootEl.querySelector('#cca-marker');
     const minEl = rootEl.querySelector('#cca-min');
-    const maxEl = rootEl.querySelector('#cca-max');
     const stopEl = rootEl.querySelector('#cca-stop-text');
     const protectEl = rootEl.querySelector('#cca-protect-titles');
     const nlmSection = rootEl.querySelector('#cca-nlm-section');
@@ -2767,7 +2865,6 @@
     timesEl.value = String(state.times);
     markerEl.value = state.marker;
     minEl.value = String(state.minNew);
-    maxEl.value = String(state.maxTotal);
     stopEl.value = state.stopText;
     if (protectEl) protectEl.value = state.protectTitles;
     if (nlmSection) {
@@ -2775,6 +2872,14 @@
       nlmSection.dataset.open = state.nlmSectionOpen ? '1' : '0';
     }
     renderSavedTexts();
+    renderMarkerMaxInputs();
+
+    markerEl.addEventListener('input', () => {
+      state.marker = markerEl.value;
+      renderMarkerMaxInputs();
+      persistUiFields();
+      updateCountLine();
+    });
 
     textEl.addEventListener('focus', () => setSavedTextsOpen(true));
     textEl.addEventListener('click', () => setSavedTextsOpen(true));
@@ -2845,7 +2950,7 @@
       });
     }
     updateDeleteButtons();
-    const persistEls = [textEl, timesEl, markerEl, minEl, maxEl, stopEl];
+    const persistEls = [textEl, timesEl, markerEl, minEl, stopEl];
     if (protectEl) persistEls.push(protectEl);
     for (const el of persistEls) {
       el.addEventListener('input', persistUiFields);
@@ -2876,10 +2981,20 @@
             : DEFAULTS.marker;
         state.minNew =
           Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
-        state.maxTotal =
-          Number.isFinite(s.maxTotal) && s.maxTotal !== LEGACY_DEFAULT_MAX_TOTAL && s.maxTotal >= 0
-            ? s.maxTotal
-            : DEFAULTS.maxTotal;
+        state.markerMax = { ...DEFAULTS.markerMax };
+        if (s.markerMax && typeof s.markerMax === 'object' && !Array.isArray(s.markerMax)) {
+          for (const [k, v] of Object.entries(s.markerMax)) {
+            if (Number.isFinite(v) && v >= 0) {
+              state.markerMax[markerKey(k)] = v;
+            }
+          }
+        } else if (
+          Number.isFinite(s.maxTotal) &&
+          s.maxTotal > 0 &&
+          s.maxTotal !== LEGACY_DEFAULT_MAX_TOTAL
+        ) {
+          state.markerMax['=ff='] = s.maxTotal;
+        }
         state.stopText =
           typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
         state.protectTitles =
