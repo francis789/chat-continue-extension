@@ -36,6 +36,8 @@
     protectTitles: '',
     /** Seção NotebookLM — limpeza expandida no painel. */
     nlmSectionOpen: false,
+    /** Exibir ou ocultar o ícone da extensão no site. */
+    visible: true,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXTS = new Set(['continue', 'execute o comando']);
@@ -141,6 +143,8 @@
     nlmSectionOpen: DEFAULTS.nlmSectionOpen,
     /** Exclusão em massa de notebooks em andamento. */
     deletingNotebooks: false,
+    /** Exibir ou ocultar o ícone da extensão no site. */
+    visible: DEFAULTS.visible,
   };
 
   let rootEl = null;
@@ -2779,6 +2783,7 @@
           stopText: state.stopText,
           protectTitles: state.protectTitles,
           nlmSectionOpen: state.nlmSectionOpen,
+          visible: state.visible,
         },
       });
     } catch {
@@ -3057,6 +3062,21 @@
     updateFab();
   }
 
+  function setUiVisible(visible) {
+    state.visible = !!visible;
+    if (rootEl) {
+      rootEl.dataset.hidden = state.visible ? '0' : '1';
+    }
+    if (!state.visible) {
+      setPanelOpen(false);
+    }
+    persistUiFields();
+  }
+
+  function toggleUiVisible() {
+    setUiVisible(!state.visible);
+  }
+
   function setPanelOpen(open) {
     if (!rootEl) buildUi();
     state.panelOpen = !!open;
@@ -3070,6 +3090,7 @@
   }
 
   function openPanel() {
+    if (!state.visible) setUiVisible(true);
     setPanelOpen(true);
   }
 
@@ -3079,11 +3100,13 @@
       rootEl = existing;
       statusEl = rootEl.querySelector('#cca-status');
       fabEl = rootEl.querySelector('#cca-fab');
+      rootEl.dataset.hidden = state.visible ? '0' : '1';
       return;
     }
 
     rootEl = document.createElement('div');
     rootEl.id = 'cca-root';
+    rootEl.dataset.hidden = state.visible ? '0' : '1';
     rootEl.innerHTML = `
       <div id="cca-panel" data-open="0">
         <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
@@ -3314,6 +3337,11 @@
           typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
         state.nlmSectionOpen =
           typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
+        state.visible =
+          typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
+        if (rootEl) {
+          rootEl.dataset.hidden = state.visible ? '0' : '1';
+        }
         cb();
       });
     } catch {
@@ -3332,6 +3360,12 @@
       sendResponse({ ok: true });
       return true;
     }
+    if (msg?.type === 'cca-toggle-icon' || msg?.type === 'cca-toggle-visibility') {
+      if (!rootEl) buildUi();
+      toggleUiVisible();
+      sendResponse({ ok: true, visible: state.visible });
+      return true;
+    }
     if (msg?.type === 'cca-open-panel' || msg?.type === 'cca-toggle-panel') {
       if (!rootEl) buildUi();
       if (msg.type === 'cca-open-panel') openPanel();
@@ -3341,6 +3375,23 @@
     }
     return false;
   });
+
+  try {
+    chrome.storage?.onChanged?.addListener((changes, areaName) => {
+      if (areaName === 'local' && changes[STORAGE_KEY]?.newValue) {
+        const newVal = changes[STORAGE_KEY].newValue;
+        if (typeof newVal.visible === 'boolean' && newVal.visible !== state.visible) {
+          state.visible = newVal.visible;
+          if (rootEl) {
+            rootEl.dataset.hidden = state.visible ? '0' : '1';
+            if (!state.visible) setPanelOpen(false);
+          }
+        }
+      }
+    });
+  } catch {
+    // storage listener indisponível
+  }
 
   window.addEventListener('cca-reopen', () => openPanel());
 

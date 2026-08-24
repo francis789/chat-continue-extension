@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chat Continue Auto",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "description": "Quando a IA para de gerar, insere um texto no input e envia — N vezes.",
   "icons": {
     "48": "icons/icon48.png",
@@ -27,7 +27,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "Chat Continue Auto — abrir painel"
+    "default_title": "Chat Continue Auto — mostrar/ocultar ícone no site"
   },
   "background": {
     "service_worker": "background.js"

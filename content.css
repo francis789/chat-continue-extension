@@ -12,6 +12,10 @@
   color-scheme: dark;
 }
 
+#cca-root[data-hidden="1"] {
+  display: none !important;
+}
+
 #cca-root * {
   box-sizing: border-box;
   font-family: inherit;

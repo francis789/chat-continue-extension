@@ -112,8 +112,8 @@ chrome.action.onClicked.addListener(async (tab) => {
 
   await chrome.action.setBadgeText({ tabId: tab.id, text: '' });
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'cca-open-panel' });
+    await chrome.tabs.sendMessage(tab.id, { type: 'cca-toggle-icon' });
   } catch (err) {
-    console.warn('[CCA] Painel não respondeu:', err);
+    console.warn('[CCA] Content script não respondeu:', err);
   }
 });
