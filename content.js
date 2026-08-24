@@ -1749,16 +1749,201 @@
   }
 
   function notebookTitle(card) {
-    const el = card.querySelector('.project-button-title');
-    return (el?.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!card) return '';
+    const el = card.querySelector(
+      '.project-button-title, [class*="project-button-title"], [class*="project-title" i], [class*="notebook-title" i], h3, h2, [class*="title" i]'
+    );
+    const text = el?.textContent || card.getAttribute('aria-label') || card.getAttribute('title') || '';
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Retorna true APENAS se o texto/atributo indicar explicitamente que o item
+   * JÁ ESTÁ fixado (ex.: "Fixado", "Pinned", "Desafixar", "Unpin").
+   * Retorna false se indicar ação de fixar (ex.: "Fixar", "Pin to top") ou "Não fixado".
+   */
+  function textOrAttrIsPinned(str) {
+    if (!str || typeof str !== 'string') return false;
+    const s = str.trim().toLowerCase();
+    if (!s) return false;
+
+    // Se disser expressamente "não fixado" ou "unpinned" ou ação de "fixar / pin"
+    if (/não fixad|not pinned|unpinned/.test(s)) return false;
+    if (/^(fixar|pin|fijar|épingler|anpinnen)(\s+na\s+parte\s+superior|\s+to\s+top)?$/.test(s)) {
+      return false; // Ação de fixar = o notebook atualmente NÃO está fixado
+    }
+
+    // Termos que indicam que o notebook JÁ ESTÁ fixado:
+    return /\bfixad[ao]s?\b|desafix|pinned|unpin|push_pin|pushpin|thumbtack|keep_pin|desfij|désépingl|loslös/.test(
+      s
+    );
+  }
+
+  /**
+   * Verifica se um elemento ou ícone corresponde a um alfinete/pin.
+   */
+  function iconLooksLikePin(el) {
+    if (!el) return false;
+    const text = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (
+      /^(push_pin|keep|keep_pin|pin|pushpin|thumbtack|bookmark|push_pin_filled|keep_public)$/i.test(
+        text
+      )
+    ) {
+      return true;
+    }
+    const fontIcon = (
+      el.getAttribute('fonticon') ||
+      el.getAttribute('data-mat-icon-name') ||
+      ''
+    ).toLowerCase();
+    if (/push_pin|keep|pin|pushpin|thumbtack/.test(fontIcon)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Verifica se o card possui elementos visuais, classes ou atributos que provam que está fixado.
+   */
+  function cardHasPinIndicators(card) {
+    if (!card) return false;
+    if (card.dataset.ccaIsPinned === '1' || card.dataset.ccaPinned === '1') return true;
+
+    // 1. Classes e atributos de estado fixado no próprio card
+    if (
+      card.matches(
+        '.pinned, .is-pinned, .project-pinned, [data-pinned="true"], [data-is-pinned="true"], [aria-pinned="true"]'
+      )
+    ) {
+      return true;
+    }
+
+    // 2. Classes explícitas de pin ativo em elementos descendentes
+    if (
+      card.querySelector(
+        '.project-action-pin-icon, .pinned-icon, [class*="pinned-icon" i]'
+      )
+    ) {
+      return true;
+    }
+
+    // 3. Atributos em elementos no card (aria-label, title, mattooltip, etc.)
+    const candidates = [card, ...card.querySelectorAll('*')];
+    for (const el of candidates) {
+      const ariaLabel = el.getAttribute('aria-label') || '';
+      const title = el.getAttribute('title') || '';
+      const tooltip = el.getAttribute('mattooltip') || el.getAttribute('data-tooltip') || '';
+      const ariaDesc = el.getAttribute('aria-description') || '';
+      if (
+        textOrAttrIsPinned(ariaLabel) ||
+        textOrAttrIsPinned(title) ||
+        textOrAttrIsPinned(tooltip) ||
+        textOrAttrIsPinned(ariaDesc)
+      ) {
+        return true;
+      }
+    }
+
+    // 4. Ícones estáticos ou botões de pin
+    const icons = Array.from(
+      card.querySelectorAll(
+        'mat-icon, .material-symbols-outlined, .material-icons, .material-icons-outlined, i, svg, [role="img"]'
+      )
+    );
+    for (const icon of icons) {
+      if (iconLooksLikePin(icon)) {
+        const parentBtn = icon.closest('button');
+        if (parentBtn) {
+          const btnText = (
+            (parentBtn.getAttribute('aria-label') || '') +
+            ' ' +
+            (parentBtn.getAttribute('title') || '') +
+            ' ' +
+            (parentBtn.textContent || '')
+          ).toLowerCase();
+          if (/desafix|unpin|desfij|désépingl|loslös/.test(btnText)) {
+            return true;
+          }
+          if (/^(fixar|pin|fijar|épingler|anpinnen)/.test(btnText.trim())) {
+            // Botão para fixar -> card não fixado
+            continue;
+          }
+        }
+        // Ícone estático no card
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Verifica se o card está localizado dentro da seção de notebooks fixados.
+   */
+  function isCardInPinnedSection(card) {
+    if (!card) return false;
+
+    // 1. Ancestrais de contêiner específicos de itens fixados
+    let parent = card.parentElement;
+    while (
+      parent &&
+      parent !== document.body &&
+      parent !== document.documentElement &&
+      !parent.matches('main, [role="main"], body')
+    ) {
+      const cls = (
+        (parent.id || '') +
+        ' ' +
+        (parent.className || '') +
+        ' ' +
+        (parent.getAttribute('data-section') || '')
+      ).toLowerCase();
+      if (
+        /\bpinned[-_]?(section|container|grid|list|projects|group)?\b|\bfixad[ao]s?[-_]?(secao|container|grade|lista|projetos|grupo)?\b/.test(
+          cls
+        )
+      ) {
+        if (!/unpinned|não[-_]?fixad|recent|tod/i.test(cls)) {
+          return true;
+        }
+      }
+      parent = parent.parentElement;
+    }
+
+    // 2. Posição relativa a cabeçalhos de seção visíveis na página
+    const allHeadings = Array.from(
+      document.querySelectorAll(
+        'h1, h2, h3, h4, h5, h6, [role="heading"], .section-header, .section-title, [class*="section-title" i], [class*="section-header" i], [class*="group-title" i]'
+      )
+    ).filter((h) => visible(h) && !h.closest('#cca-root'));
+
+    let lastPrecedingHeading = null;
+    for (const h of allHeadings) {
+      if (h.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        lastPrecedingHeading = h;
+      }
+    }
+
+    if (lastPrecedingHeading) {
+      const ht = (lastPrecedingHeading.textContent || '').trim().toLowerCase();
+      if (
+        /\bfixad[ao]s?\b|\bpinned\b/.test(ht) &&
+        !/não fixad|not pinned|unpinn|recent|tod|outr|all\b/.test(ht)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   function isNotebookPinned(card) {
-    if (card.querySelector('.project-action-pin-icon')) return true;
-    const pin = card.querySelector(
-      '[aria-label*="fixado" i], [aria-label*="pinned" i], [mattooltip*="Fixado" i], [mattooltip*="Pinned" i]'
-    );
-    return !!pin;
+    if (!card) return false;
+    if (card.dataset.ccaIsPinned === '1' || card.dataset.ccaPinned === '1') return true;
+    if (cardHasPinIndicators(card)) return true;
+    if (isCardInPinnedSection(card)) return true;
+    return false;
   }
 
   function titleIsProtected(title, protectList) {
@@ -1767,31 +1952,82 @@
     return protectList.some((p) => lower.includes(p.toLowerCase()));
   }
 
+  function isMoreButton(btn) {
+    if (!btn) return false;
+    if (btn.classList.contains('project-button-more')) return true;
+    const label = (
+      (btn.getAttribute('aria-label') || '') +
+      ' ' +
+      (btn.getAttribute('title') || '') +
+      ' ' +
+      (btn.textContent || '')
+    ).toLowerCase();
+    if (/ações|acoes|action|option|opç|mais|more|menu|more_vert|more_horiz/.test(label)) {
+      return true;
+    }
+    const icon = btn.querySelector('mat-icon, .material-symbols-outlined, .material-icons, svg');
+    if (icon) {
+      const iconText = (icon.textContent || '').trim().toLowerCase();
+      if (/more_vert|more_horiz|menu/.test(iconText)) return true;
+    }
+    return false;
+  }
+
+  function findNotebookCards() {
+    const selectors = [
+      'project-button',
+      '.project-button',
+      '[class*="project-button"]',
+      '.project-card',
+      '[class*="project-card"]',
+      'mat-card[class*="project"]',
+      'a[href*="/notebook/"]',
+      '[data-project-id]'
+    ];
+    const found = [];
+    for (const sel of selectors) {
+      const els = Array.from(document.querySelectorAll(sel));
+      for (const el of els) {
+        if (!el || el.closest('#cca-root')) continue;
+        const card = el.closest('project-button') || el;
+        if (!found.includes(card)) {
+          found.push(card);
+        }
+      }
+    }
+    return found;
+  }
+
   /** Cards de notebook elegíveis para exclusão (não fixados e sem texto protetor). */
   function findDeletableNotebooks(protectList, skipTitles) {
     const skipped = skipTitles || new Set();
-    return Array.from(document.querySelectorAll('project-button.project-button')).filter(
-      (card) => {
-        if (card.closest('#cca-root')) return false;
-        if (card.dataset.ccaSkipDelete === '1') return false;
-        if (isNotebookPinned(card)) return false;
-        const title = notebookTitle(card);
-        if (!title) return false;
-        if (skipped.has(title.toLowerCase())) return false;
-        if (titleIsProtected(title, protectList)) return false;
-        const more = findNotebookMoreButton(card);
-        return !!more;
-      }
-    );
+    const cards = findNotebookCards();
+
+    return cards.filter((card) => {
+      if (card.closest('#cca-root')) return false;
+      if (card.dataset.ccaSkipDelete === '1' || card.dataset.ccaIsPinned === '1') return false;
+      if (isNotebookPinned(card)) return false;
+      const title = notebookTitle(card);
+      if (!title) return false;
+      if (skipped.has(title.toLowerCase())) return false;
+      if (titleIsProtected(title, protectList)) return false;
+      const more = findNotebookMoreButton(card);
+      return !!more;
+    });
   }
 
   function findNotebookMoreButton(card) {
-    return (
+    if (!card) return null;
+    const direct =
       card.querySelector('button.project-button-more') ||
       card.querySelector(
-        'button[aria-label*="ações do projeto" i], button[aria-label*="Project Actions" i], button[aria-label*="More options" i], button[aria-label*="Mais opções" i]'
-      )
-    );
+        'button[aria-label*="ações do projeto" i], button[aria-label*="ações" i], button[aria-label*="Project Actions" i], button[aria-label*="More options" i], button[aria-label*="Mais opções" i], button[aria-label*="Options" i], button[aria-label*="Opções" i]'
+      );
+    if (direct) return direct;
+    for (const btn of card.querySelectorAll('button')) {
+      if (isMoreButton(btn)) return btn;
+    }
+    return null;
   }
 
   function menuItemLooksLikeDelete(el) {
@@ -1806,24 +2042,23 @@
     if (!t) return false;
     // Evita "Desafixar" / "Unpin" e itens de compartilhamento.
     if (
-      /desafixar|unpin|renomear|rename|compartilh|share|abrir|open|mover|move|copiar|copy/.test(
+      /desafixar|desafix|unpin|desfij|désépingl|loslös|renomear|rename|compartilh|share|abrir|open|mover|move|copiar|copy/.test(
         t
       )
     ) {
       return false;
     }
     // "Fixar"/"Pin" sozinhos não são exclusão.
-    if (/^(fixar|pin|unpin|keep)$/.test(t)) return false;
+    if (/^(fixar|pin|unpin|keep|desafixar)$/.test(t)) return false;
     return /exclu|delete|apagar|remover notebook|delete notebook|remove notebook/.test(t);
   }
 
   function findOpenDeleteMenuItem() {
     const items = Array.from(
       document.querySelectorAll(
-        '[role="menuitem"], button.mat-mdc-menu-item, .mat-mdc-menu-item'
+        '[role="menuitem"], button.mat-mdc-menu-item, .mat-mdc-menu-item, .mat-menu-item'
       )
     );
-    // Não exige visible() estrito: o painel do menu Angular às vezes reporta 0x0 no 1º frame.
     return (
       items.find((el) => {
         if (!menuItemLooksLikeDelete(el)) return false;
@@ -2042,6 +2277,14 @@
   async function deleteOneNotebook(card) {
     const title = notebookTitle(card);
 
+    // ── Camada 1 de proteção: Verificação prévia no card ──
+    if (isNotebookPinned(card)) {
+      dlog('ABORTADO: Notebook fixado detectado antes de abrir menu:', title);
+      card.dataset.ccaSkipDelete = '1';
+      card.dataset.ccaIsPinned = '1';
+      return { ok: false, title, reason: 'notebook fixado' };
+    }
+
     if (findDeleteConfirmDialog()) {
       const confirmed = await confirmPendingDeleteDialog();
       if (confirmed) return { ok: true, title, reason: 'modal pendente confirmado' };
@@ -2060,6 +2303,41 @@
     await sleep(150);
     robustClick(more);
     await sleep(300);
+
+    // ── Camada 2 de proteção: Inspeção de todos os itens do menu aberto ──
+    // Se o menu contiver a opção "Desafixar" / "Unpin", este notebook É DEFINITIVAMENTE FIXADO.
+    const allOpenMenuItems = Array.from(
+      document.querySelectorAll(
+        '[role="menuitem"], button.mat-mdc-menu-item, .mat-mdc-menu-item, .mat-menu-item'
+      )
+    );
+
+    const isPinnedFromMenu = allOpenMenuItems.some((item) => {
+      const t = (
+        (item.getAttribute('aria-label') || '') +
+        ' ' +
+        (item.getAttribute('title') || '') +
+        ' ' +
+        (item.innerText || item.textContent || '')
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+      if (/desafix|unpin|desfij|désépingl|loslös/.test(t)) {
+        return true;
+      }
+      return false;
+    });
+
+    if (isPinnedFromMenu) {
+      dlog('ABORTADO: Notebook está FIXADO (detectado no menu ⋮ aberto):', title);
+      card.dataset.ccaSkipDelete = '1';
+      card.dataset.ccaIsPinned = '1';
+      dismissOpenMenus();
+      await sleep(200);
+      return { ok: false, title, reason: 'notebook fixado (detectado no menu ⋮)' };
+    }
 
     const menuItem = await waitFor(findOpenDeleteMenuItem, {
       timeoutMs: 5000,
@@ -2107,8 +2385,8 @@
       () => {
         if (!document.contains(card)) return true;
         const still = Array.from(
-          document.querySelectorAll('project-button.project-button .project-button-title')
-        ).some((el) => (el.textContent || '').replace(/\s+/g, ' ').trim() === title);
+          document.querySelectorAll('project-button, .project-button, [class*="project-button"]')
+        ).some((el) => notebookTitle(el) === title);
         return !still;
       },
       { timeoutMs: 4000, intervalMs: 200 }
@@ -2154,11 +2432,32 @@
     persistUiFields();
     const protectList = parseProtectTitles();
     const skipTitles = new Set();
+
+    const allCards = findNotebookCards();
+    const pinnedCards = allCards.filter(isNotebookPinned);
     const preview = findDeletableNotebooks(protectList, skipTitles);
+
+    dlog('NotebookLM limpeza:', {
+      totalCards: allCards.length,
+      pinnedCount: pinnedCards.length,
+      eligibleCount: preview.length,
+      protectedTitles: protectList,
+    });
+
     if (!preview.length) {
-      setStatus(
-        'Nenhum notebook elegível: todos estão fixados, protegidos pelo texto do título, ou não há cards.'
-      );
+      if (allCards.length === 0) {
+        setStatus(
+          'Nenhum card de notebook encontrado na página. Certifique-se de estar na página inicial do NotebookLM.'
+        );
+      } else if (pinnedCards.length === allCards.length) {
+        setStatus(
+          `Nenhum notebook elegível: todos os <strong>${allCards.length}</strong> notebooks estão fixados.`
+        );
+      } else {
+        setStatus(
+          `Nenhum notebook elegível (${allCards.length} no total: ${pinnedCards.length} fixado(s), demais protegidos pelo texto do título).`
+        );
+      }
       return;
     }
 
@@ -2167,7 +2466,8 @@
       .map((c) => notebookTitle(c))
       .join(' · ');
     const ok = window.confirm(
-      `Excluir ${preview.length} notebook(s) não fixado(s)?\n\n` +
+      `Excluir ${preview.length} notebook(s) NÃO FIXADO(S)?\n\n` +
+        `Notebooks fixados e os protegidos por título serão preservados.\n\n` +
         (protectList.length
           ? `Protegidos (título contém): ${protectList.join(', ')}\n\n`
           : '') +
@@ -2255,6 +2555,14 @@
             deleted += 1;
             failCounts.delete(title.toLowerCase());
             dlog('notebook excluído', result.title);
+          } else if (result.reason?.includes('fixado')) {
+            const key = title.toLowerCase();
+            skipTitles.add(key);
+            card.dataset.ccaSkipDelete = '1';
+            card.dataset.ccaIsPinned = '1';
+            dlog('notebook fixado preservado:', result.title);
+            setStatus(`Preservando notebook fixado: "${escapeHtml(title.slice(0, 50))}"`);
+            await sleep(300);
           } else {
             const key = title.toLowerCase();
             const n = (failCounts.get(key) || 0) + 1;
@@ -2830,9 +3138,8 @@
               <button type="button" id="cca-stop-delete-notebooks" disabled title="Interrompe a limpeza em andamento.">Parar limpeza</button>
             </div>
             <p class="cca-nlm-hint">
-              Preserva notebooks fixados (ícone de alfinete) e os cujo título
-              contenha qualquer texto do campo acima. Use na página inicial
-              do NotebookLM. Continua mesmo com o navegador em segundo plano.
+              Preserva rigorosamente notebooks fixados (ícone de alfinete, seção fixados e opção de desafixar)
+              e os cujo título contenha qualquer texto do campo acima. Use na página inicial do NotebookLM.
             </p>
           </div>
         </div>
