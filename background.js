@@ -95,6 +95,54 @@ async function ensureContentScript(tabId) {
   }
 }
 
+// Acompanha abas com notificação visual pendente
+const notifiedTabs = new Set();
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const tabId = sender?.tab?.id;
+  const windowId = sender?.tab?.windowId;
+
+  if (msg?.type === 'cca-notify-stopped') {
+    if (tabId != null) {
+      notifiedTabs.add(tabId);
+      chrome.action.setBadgeText({ tabId, text: '●' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#e53e3e' }).catch(() => {});
+    }
+    if (windowId != null) {
+      chrome.windows.update(windowId, { drawAttention: true }).catch(() => {});
+    }
+    sendResponse?.({ ok: true });
+    return true;
+  }
+
+  if (msg?.type === 'cca-clear-notification') {
+    if (tabId != null) {
+      notifiedTabs.delete(tabId);
+      chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+    }
+    sendResponse?.({ ok: true });
+    return true;
+  }
+});
+
+// Ao ativar/focar uma aba com notificação pendente, limpa o badge da extensão e avisa o content script
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const tabId = activeInfo.tabId;
+  if (notifiedTabs.has(tabId)) {
+    notifiedTabs.delete(tabId);
+    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'cca-clear-notification' });
+    } catch {
+      // ignore
+    }
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  notifiedTabs.delete(tabId);
+});
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
 
@@ -117,3 +165,4 @@ chrome.action.onClicked.addListener(async (tab) => {
     console.warn('[CCA] Content script não respondeu:', err);
   }
 });
+

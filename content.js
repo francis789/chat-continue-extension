@@ -163,6 +163,292 @@
     // contexto invalidado — segue sem versão
   }
 
+  // ─── Notificação Visual na Aba e Barra de Tarefas ──────────────────
+
+  let notificationActive = false;
+  let originalDocumentTitle = '';
+  let originalFaviconHrefs = [];
+  let originalFaviconElements = [];
+  let faviconObserver = null;
+  let titleObserver = null;
+
+  /** Coleta os favicons originais da página antes de aplicar o badge. */
+  function captureOriginalFavicons() {
+    const links = Array.from(document.querySelectorAll("link[rel*='icon']"));
+    if (links.length > 0) {
+      originalFaviconElements = links.map((l) => ({
+        rel: l.getAttribute('rel') || 'icon',
+        type: l.getAttribute('type') || '',
+        sizes: l.getAttribute('sizes') || '',
+        href: l.getAttribute('href') || l.href,
+      }));
+      originalFaviconHrefs = links.map((l) => l.getAttribute('href') || l.href);
+    } else {
+      originalFaviconElements = [{ rel: 'icon', type: '', sizes: '', href: '/favicon.ico' }];
+      originalFaviconHrefs = ['/favicon.ico'];
+    }
+  }
+
+  /**
+   * Renderiza a imagem do favicon original (ou fallback) com a bolinha
+   * vermelha de notificação no canto superior direito usando Canvas.
+   */
+  function createBadgedFaviconDataUrl(sourceUrl) {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(null);
+        return;
+      }
+
+      function drawBadge() {
+        // Círculo branco de borda externa para alto contraste
+        ctx.beginPath();
+        ctx.arc(23, 9, 6.5, 0, 2 * Math.PI, false);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        // Círculo vermelho interno
+        ctx.beginPath();
+        ctx.arc(23, 9, 4.5, 0, 2 * Math.PI, false);
+        ctx.fillStyle = '#e53e3e';
+        ctx.fill();
+
+        try {
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          drawFallbackIcon();
+        }
+      }
+
+      function drawFallbackIcon() {
+        try {
+          ctx.clearRect(0, 0, 32, 32);
+          ctx.beginPath();
+          ctx.arc(16, 16, 13, 0, 2 * Math.PI, false);
+          ctx.fillStyle = '#2563eb';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(16, 16, 5, 0, 2 * Math.PI, false);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(23, 9, 6.5, 0, 2 * Math.PI, false);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(23, 9, 4.5, 0, 2 * Math.PI, false);
+          ctx.fillStyle = '#e53e3e';
+          ctx.fill();
+
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          resolve(null);
+        }
+      }
+
+      if (!sourceUrl) {
+        drawFallbackIcon();
+        return;
+      }
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          ctx.clearRect(0, 0, 32, 32);
+          ctx.drawImage(img, 0, 0, 32, 32);
+          drawBadge();
+        } catch {
+          drawFallbackIcon();
+        }
+      };
+      img.onerror = () => {
+        drawFallbackIcon();
+      };
+      img.src = sourceUrl;
+    });
+  }
+
+  /** Aplica o favicon modificado com a bolinha no DOM. */
+  async function applyBadgedFavicon() {
+    if (!notificationActive) return;
+    const currentFavicon = originalFaviconHrefs[0] || '/favicon.ico';
+    const badgedDataUrl = await createBadgedFaviconDataUrl(currentFavicon);
+    if (!badgedDataUrl || !notificationActive) return;
+
+    // Remove favicons anteriores que não tenham o identificador da extensão
+    const existing = Array.from(document.querySelectorAll("link[rel*='icon']"));
+    for (const el of existing) {
+      if (el.dataset.ccaBadged !== 'true') {
+        el.remove();
+      }
+    }
+
+    let link = document.querySelector('link[data-cca-badged="true"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      link.type = 'image/png';
+      link.dataset.ccaBadged = 'true';
+      document.head.appendChild(link);
+    }
+    link.href = badgedDataUrl;
+  }
+
+  /** Ativa a bolinha visual na aba e no ícone da barra de tarefas. */
+  function triggerStopNotification(reason = '') {
+    if (notificationActive) return;
+    notificationActive = true;
+
+    // 1. Captura estado original do favicon e título
+    captureOriginalFavicons();
+    if (!originalDocumentTitle) {
+      originalDocumentTitle = document.title || '';
+    }
+
+    // 2. Aplica bolinha no favicon
+    void applyBadgedFavicon();
+
+    // 3. Adiciona indicador visual no título da aba se ainda não tiver
+    if (!document.title.startsWith('● ')) {
+      document.title = `● ${document.title}`;
+    }
+
+    // 4. Observa mutações do SPA (ex.: ChatGPT/Claude alterando favicon ou título)
+    if (!faviconObserver) {
+      faviconObserver = new MutationObserver(() => {
+        if (!notificationActive) return;
+        const currentBadged = document.querySelector('link[data-cca-badged="true"]');
+        if (!currentBadged) {
+          void applyBadgedFavicon();
+        }
+      });
+      faviconObserver.observe(document.head, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['href', 'rel'],
+      });
+    }
+
+    if (!titleObserver) {
+      titleObserver = new MutationObserver(() => {
+        if (!notificationActive) return;
+        if (!document.title.startsWith('● ')) {
+          document.title = `● ${document.title}`;
+        }
+      });
+      const titleEl = document.querySelector('title');
+      if (titleEl) {
+        titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+      }
+    }
+
+    // 5. Badging API no navegador (para o ícone na barra de tarefas)
+    try {
+      if (navigator.setAppBadge) {
+        navigator.setAppBadge().catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+
+    // 6. Notifica o background para alertar o ícone da janela e marcar badge
+    try {
+      chrome.runtime.sendMessage({ type: 'cca-notify-stopped', reason }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    dlog('Notificação visual ativada (bolinha na aba e barra de tarefas):', reason);
+  }
+
+  /** Remove as bolinhas de notificação e restaura o favicon e título originais. */
+  function clearStopNotification() {
+    if (!notificationActive) return;
+    notificationActive = false;
+
+    // Desconecta observadores
+    if (faviconObserver) {
+      faviconObserver.disconnect();
+      faviconObserver = null;
+    }
+    if (titleObserver) {
+      titleObserver.disconnect();
+      titleObserver = null;
+    }
+
+    // Remove favicon modificado
+    const badgedLinks = document.querySelectorAll('link[data-cca-badged="true"]');
+    badgedLinks.forEach((el) => el.remove());
+
+    // Restaura favicons originais
+    if (originalFaviconElements.length > 0) {
+      for (const orig of originalFaviconElements) {
+        const link = document.createElement('link');
+        link.rel = orig.rel || 'icon';
+        if (orig.type) link.type = orig.type;
+        if (orig.sizes) link.sizes = orig.sizes;
+        link.href = orig.href;
+        document.head.appendChild(link);
+      }
+    } else {
+      const link = document.createElement('link');
+      link.rel = 'icon';
+      link.href = originalFaviconHrefs[0] || '/favicon.ico';
+      document.head.appendChild(link);
+    }
+
+    // Restaura título
+    if (document.title.startsWith('● ')) {
+      document.title = document.title.replace(/^●\s*/, '');
+    }
+    originalDocumentTitle = '';
+
+    // Limpa badge do aplicativo na barra de tarefas
+    try {
+      if (navigator.clearAppBadge) {
+        navigator.clearAppBadge().catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+
+    // Notifica background para limpar badge da extensão
+    try {
+      chrome.runtime.sendMessage({ type: 'cca-clear-notification' }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    dlog('Notificação visual removida pelo clique/foco na aba.');
+  }
+
+  // Remove a notificação assim que o usuário interagir ou focar nesta aba
+  function onUserInteractedWithTab() {
+    if (notificationActive) {
+      clearStopNotification();
+    }
+  }
+
+  window.addEventListener('focus', onUserInteractedWithTab, true);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      onUserInteractedWithTab();
+    }
+  });
+  document.addEventListener('pointerdown', onUserInteractedWithTab, true);
+  document.addEventListener('click', onUserInteractedWithTab, true);
+  document.addEventListener('keydown', onUserInteractedWithTab, true);
+
+
   /** Log de diagnóstico — abra o console (F12) e filtre por [CCA]. */
   function dlog(...args) {
     try {
@@ -718,6 +1004,7 @@
       `🛑 <strong>Resposta concluída com o texto de parada</strong>: ` +
         `"${escapeHtml(state.stopText)}". Inserções encerradas.`
     );
+    triggerStopNotification(`Texto de parada: "${state.stopText}"`);
     return true;
   }
 
@@ -1488,6 +1775,7 @@
             `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
               `ocorrências na página. Execução parada.`
           );
+          triggerStopNotification('Limite de ocorrências atingido');
           return;
         }
         const c = countMarker();
@@ -1568,6 +1856,7 @@
         `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
           `ocorrências na página. Execução parada.`
       );
+      triggerStopNotification('Limite de ocorrências atingido');
       return true;
     }
 
@@ -2616,6 +2905,7 @@
           (passes >= maxPasses ? ' · limite de tentativas' : '') +
           '.'
       );
+      triggerStopNotification('Exclusão de notebooks concluída');
     }
   }
 
@@ -2645,6 +2935,7 @@
     stopTimer();
     updateFab();
     setStatus(`Concluído. IA terminou a última resposta (${reason}).`);
+    triggerStopNotification(`Concluído (${reason})`);
   }
 
   // ─── Temporizador ────────────────────────────────────────────────
@@ -2998,6 +3289,7 @@
   }
 
   function start() {
+    clearStopNotification();
     if (state.deletingNotebooks) {
       setStatus('Pare a limpeza de notebooks antes de iniciar.');
       return;
@@ -3046,6 +3338,7 @@
   }
 
   function stop() {
+    clearStopNotification();
     state.armed = false;
     state.finishing = false;
     state.remaining = 0;
@@ -3364,6 +3657,11 @@
       if (!rootEl) buildUi();
       toggleUiVisible();
       sendResponse({ ok: true, visible: state.visible });
+      return true;
+    }
+    if (msg?.type === 'cca-clear-notification' || msg?.type === 'cca-clear-tab-badge') {
+      clearStopNotification();
+      sendResponse({ ok: true });
       return true;
     }
     if (msg?.type === 'cca-open-panel' || msg?.type === 'cca-toggle-panel') {
