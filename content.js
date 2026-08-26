@@ -11,12 +11,16 @@
   const STORAGE_KEY = 'cca_settings';
   const DEFAULT_SAVED_TEXTS = [
     {
-      text: 'faça o sumário',
+      text: 'Faça a classificação.',
       tag: 'Sumário',
     },
     {
-      text: 'faça a classificação',
+      text: 'Faça o sumário.',
       tag: 'Sumário',
+    },
+    {
+      text: 'Execute o comando. Uma tag por linha, copiando o exemplo do COMANDO. Proibido: dois pontos (id:), wrapper =tag=(...), vírgula depois do valor, aspas no =texto=.',
+      tag: 'Mapas',
     },
     {
       text: 'Execute o comando.',
@@ -25,10 +29,6 @@
     {
       text: 'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
       tag: 'Resumos',
-    },
-    {
-      text: 'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
-      tag: 'Mapas',
     },
   ];
   const DEFAULT_MARKER_MAX = {
@@ -59,7 +59,18 @@
     visible: true,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
-  const LEGACY_DEFAULT_TEXTS = new Set(['continue', 'execute o comando']);
+  const LEGACY_DEFAULT_TEXTS = new Set([
+    'continue',
+    'execute o comando',
+    'faça o sumário',
+    'faça a classificação',
+  ]);
+  /** Textos salvos de versões anteriores — não reinsere após o usuário substituí-los. */
+  const LEGACY_DEFAULT_SAVED_TEXTS = new Set([
+    'faça o sumário',
+    'faça a classificação',
+    'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
+  ]);
   const LEGACY_DEFAULT_MARKERS = new Set([
     '=ff=',
     '=ff=; blueprint',
@@ -3682,7 +3693,9 @@
         if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
         else state.text = DEFAULTS.text;
         const loadedSaved = Array.isArray(s.savedTexts)
-          ? normalizeSavedTexts(s.savedTexts)
+          ? normalizeSavedTexts(s.savedTexts).filter(
+              (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
+            )
           : [];
         if (!loadedSaved.length) {
           state.savedTexts = DEFAULT_SAVED_TEXTS.map((item) => ({ ...item }));
