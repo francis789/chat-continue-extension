@@ -11,6 +11,7 @@
   const STORAGE_KEY = 'cca_settings';
   const DEFAULT_SAVED_TEXTS = [
     'Execute o comando.',
+    'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
     'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
   ];
   const DEFAULT_MARKER_MAX = {
@@ -3550,9 +3551,20 @@
         // Mantém texto personalizado; migra só o default antigo.
         if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
         else state.text = DEFAULTS.text;
-        state.savedTexts = Array.isArray(s.savedTexts)
+        const loadedSaved = Array.isArray(s.savedTexts)
           ? normalizeSavedTexts(s.savedTexts)
-          : [...DEFAULTS.savedTexts];
+          : [];
+        if (!loadedSaved.length) {
+          state.savedTexts = [...DEFAULTS.savedTexts];
+        } else {
+          const merged = [...loadedSaved];
+          for (const defText of DEFAULT_SAVED_TEXTS) {
+            if (!merged.includes(defText)) {
+              merged.push(defText);
+            }
+          }
+          state.savedTexts = merged;
+        }
         state.times =
           Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
             ? s.times
