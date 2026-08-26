@@ -106,11 +106,16 @@ const FALLBACK_NOTIFY_ICON =
 
 let cachedNotifyIconUrl = null;
 
-/** Abas concluídas (pendentes) vs. ainda em atividade. */
+/** Abas concluídas (pendentes) vs. ainda em atividade. Alertas não contam como conclusão. */
+function isAlertEntry(entry) {
+  return !!entry && typeof entry === 'object' && entry.kind === 'alert';
+}
+
 function getActivityProgress() {
   let completed = 0;
   const finishedIds = new Set();
-  for (const [tabId] of notifiedTabs) {
+  for (const [tabId, entry] of notifiedTabs) {
+    if (isAlertEntry(entry)) continue;
     completed += 1;
     finishedIds.add(tabId);
   }
@@ -142,6 +147,72 @@ function updateGlobalExtensionBadge() {
   if (text) {
     chrome.action.setBadgeBackgroundColor({ color: '#e11d48' }).catch(() => {});
   }
+}
+
+function buildAlertNotificationCopy(entry) {
+  const reason = entry?.reason;
+  return {
+    title: 'Alerta: resposta sem string aceita',
+    message:
+      reason ||
+      'A resposta final não contém as strings aceitas nem o texto de parada.',
+  };
+}
+
+function fillRoundRect(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, w, h, radius);
+  } else {
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + w, y, x + w, y + h, radius);
+    ctx.arcTo(x + w, y + h, x, y + h, radius);
+    ctx.arcTo(x, y + h, x, y, radius);
+    ctx.arcTo(x, y, x + w, y, radius);
+    ctx.closePath();
+  }
+  ctx.fill();
+}
+
+let cachedAlertIconUrl = null;
+
+async function renderAlertIconDataUrl() {
+  if (typeof OffscreenCanvas === 'undefined') return null;
+  const size = 128;
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#0f172a';
+  fillRoundRect(ctx, 0, 0, size, size, 28);
+
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, 52, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#0f172a';
+  fillRoundRect(ctx, 58, 32, 12, 44, 6);
+  ctx.beginPath();
+  ctx.arc(size / 2, 92, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  const out = await canvas.convertToBlob({ type: 'image/png' });
+  return blobToDataUrl(out);
+}
+
+async function getAlertIconUrl() {
+  if (cachedAlertIconUrl) return cachedAlertIconUrl;
+  try {
+    const url = await renderAlertIconDataUrl();
+    if (url) {
+      cachedAlertIconUrl = url;
+      return cachedAlertIconUrl;
+    }
+  } catch (err) {
+    console.warn('[CCA] Falha ao gerar ícone de alerta:', err);
+  }
+  return FALLBACK_NOTIFY_ICON;
 }
 
 function buildStoppedNotificationCopy(entry, progress) {
@@ -330,7 +401,12 @@ async function ensureProgressHelper(progress, iconUrl) {
 async function applyProgressVisuals(progress) {
   updateGlobalExtensionBadge();
   const badge = formatProgressBadge(progress.completed, progress.total);
-  for (const tabId of notifiedTabs.keys()) {
+  for (const [tabId, entry] of notifiedTabs) {
+    if (isAlertEntry(entry)) {
+      chrome.action.setBadgeText({ tabId, text: '!' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#d97706' }).catch(() => {});
+      continue;
+    }
     chrome.action.setBadgeText({ tabId, text: badge }).catch(() => {});
     chrome.action.setBadgeBackgroundColor({ tabId, color: '#e11d48' }).catch(() => {});
   }
@@ -439,6 +515,7 @@ async function refreshProgressNotifications() {
   const progress = getActivityProgress();
   const iconUrl = await applyProgressVisuals(progress);
   for (const entry of notifiedTabs.values()) {
+    if (isAlertEntry(entry)) continue;
     const notifId = entryNotifId(entry);
     if (!notifId) continue;
     const copy = buildStoppedNotificationCopy(entry, progress);
@@ -490,6 +567,7 @@ async function handleNotifyStopped(msg, sender) {
     notifId,
     windowId: windowId ?? null,
     reason: msg?.reason || '',
+    kind: 'stopped',
     at: Date.now(),
     leftFocus: false,
   };
@@ -523,6 +601,65 @@ async function handleNotifyStopped(msg, sender) {
   return { ok: true, completed: progress.completed, total: progress.total };
 }
 
+async function handleNotifyAlert(msg, sender) {
+  const tabId = sender?.tab?.id;
+  let windowId = sender?.tab?.windowId;
+
+  if (tabId == null) return { ok: false, error: 'Aba indisponível.' };
+
+  const permission = await chrome.notifications.getPermissionLevel().catch(() => 'granted');
+  if (permission === 'denied') {
+    return { ok: false, error: 'Notificações bloqueadas para esta extensão no Brave.' };
+  }
+
+  if (windowId == null) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      windowId = tab?.windowId;
+    } catch {
+      // ignore
+    }
+  }
+
+  const prev = notifiedTabs.get(tabId);
+  const notifId = `cca-alert-${tabId}`;
+  const entry = {
+    notifId,
+    windowId: windowId ?? null,
+    reason: msg?.reason || '',
+    kind: 'alert',
+    at: Date.now(),
+    leftFocus: false,
+  };
+  notifiedTabs.set(tabId, entry);
+  if (prev) {
+    const prevId = entryNotifId(prev);
+    if (prevId && prevId !== notifId) {
+      chrome.notifications.clear(prevId).catch(() => {});
+    }
+    closeHelperWindow(prev);
+  }
+
+  const copy = buildAlertNotificationCopy(entry);
+  const iconUrl = await getAlertIconUrl();
+
+  try {
+    await createNativeNotification(notifId, {
+      title: copy.title,
+      message: copy.message,
+      silent: false,
+      iconUrl,
+    });
+  } catch (err) {
+    console.warn('[CCA] Erro ao criar notificação de alerta:', err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+
+  scheduleProgressRefresh();
+  await flashTaskbarIcon(windowId);
+  return { ok: true, kind: 'alert' };
+}
+
 function shouldClearOnFocus(entry) {
   if (!entry) return false;
   if (Date.now() - entry.at < FOCUS_CLEAR_GRACE_MS) return false;
@@ -550,6 +687,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((result) => sendResponse?.(result))
       .catch((err) => {
         console.warn('[CCA] cca-notify-stopped:', err);
+        sendResponse?.({ ok: false, error: err?.message || String(err) });
+      });
+    return true;
+  }
+
+  if (msg?.type === 'cca-notify-alert') {
+    handleNotifyAlert(msg, sender)
+      .then((result) => sendResponse?.(result))
+      .catch((err) => {
+        console.warn('[CCA] cca-notify-alert:', err);
         sendResponse?.({ ok: false, error: err?.message || String(err) });
       });
     return true;

@@ -196,13 +196,19 @@
 
   // ─── Notificação Visual na Aba (Play / Check) e Barra de Tarefas ──
 
-  let tabVisualState = 'idle'; // 'idle' | 'running' | 'finished'
+  let tabVisualState = 'idle'; // 'idle' | 'running' | 'finished' | 'alert'
   let notificationSetAt = 0;
   let originalDocumentTitle = '';
   let originalFaviconHrefs = [];
   let originalFaviconElements = [];
   let faviconObserver = null;
   let titleObserver = null;
+  /** Evita reemitir o alerta da mesma resposta concluída. */
+  let lastAlertedReplyKey = '';
+
+  function stripTabTitleMark(title) {
+    return String(title || '').replace(/^(?:[▶✔🔴●]|⚠\uFE0F?)\s*/, '');
+  }
 
   /** Coleta os favicons originais da página antes de aplicar o ícone customizado. */
   function captureOriginalFavicons() {
@@ -232,6 +238,17 @@
       <circle cx="16" cy="16" r="15" fill="#0f172a"/>
       <circle cx="16" cy="16" r="13" fill="#10b981"/>
       <polygon points="12.5,9.5 23.5,16 12.5,22.5" fill="#ffffff"/>
+    </svg>`;
+    return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  }
+
+  /** Ícone SVG de alerta (⚠) para resposta concluída sem string aceita nem texto de parada. */
+  function getAlertFaviconSvgDataUrl() {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <circle cx="16" cy="16" r="15" fill="#0f172a"/>
+      <circle cx="16" cy="16" r="13" fill="#f59e0b"/>
+      <rect x="14.2" y="8" width="3.6" height="11" rx="1.6" fill="#0f172a"/>
+      <circle cx="16" cy="23.2" r="2.15" fill="#0f172a"/>
     </svg>`;
     return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
   }
@@ -288,6 +305,9 @@
         } else if (tabVisualState === 'finished') {
           const current = document.querySelector('link[data-cca-custom="true"]');
           if (!current) applyCustomFavicon(getCheckFaviconSvgDataUrl());
+        } else if (tabVisualState === 'alert') {
+          const current = document.querySelector('link[data-cca-custom="true"]');
+          if (!current) applyCustomFavicon(getAlertFaviconSvgDataUrl());
         }
       });
       faviconObserver.observe(document.head, {
@@ -302,11 +322,15 @@
       titleObserver = new MutationObserver(() => {
         if (tabVisualState === 'running') {
           if (!document.title.startsWith('▶ ')) {
-            document.title = `▶ ${document.title.replace(/^[▶✔🔴●]\s*/, '')}`;
+            document.title = `▶ ${stripTabTitleMark(document.title)}`;
           }
         } else if (tabVisualState === 'finished') {
           if (!document.title.startsWith('✔ ')) {
-            document.title = `✔ ${document.title.replace(/^[▶✔🔴●]\s*/, '')}`;
+            document.title = `✔ ${stripTabTitleMark(document.title)}`;
+          }
+        } else if (tabVisualState === 'alert') {
+          if (!document.title.startsWith('⚠') && !document.title.startsWith('⚠️')) {
+            document.title = `⚠ ${stripTabTitleMark(document.title)}`;
           }
         }
       });
@@ -322,7 +346,7 @@
     tabVisualState = 'running';
     captureOriginalFavicons();
     if (!originalDocumentTitle) {
-      originalDocumentTitle = document.title.replace(/^[▶✔🔴●]\s*/, '') || '';
+      originalDocumentTitle = stripTabTitleMark(document.title) || '';
     }
 
     applyCustomFavicon(getPlayFaviconSvgDataUrl());
@@ -342,7 +366,7 @@
     notificationSetAt = Date.now();
     captureOriginalFavicons();
     if (!originalDocumentTitle) {
-      originalDocumentTitle = document.title.replace(/^[▶✔🔴●]\s*/, '') || '';
+      originalDocumentTitle = stripTabTitleMark(document.title) || '';
     }
 
     applyCustomFavicon(getCheckFaviconSvgDataUrl());
@@ -375,6 +399,46 @@
     }
 
     dlog('Visual de conclusão ativado (ícone ✔ na aba e notificação na barra de tarefas):', reason);
+  }
+
+  /** Volta ao visual de atividade sem limpar a notificação nativa de alerta. */
+  function restoreRunningTabVisualIfNeeded() {
+    if (tabVisualState !== 'alert') return;
+    tabVisualState = 'running';
+    applyCustomFavicon(getPlayFaviconSvgDataUrl());
+    document.title = `▶ ${originalDocumentTitle || stripTabTitleMark(document.title)}`;
+  }
+
+  /** Ativa o ícone de alerta na aba e a notificação nativa com ícone de aviso. */
+  function setAlertTabVisual(reason = '') {
+    tabVisualState = 'alert';
+    notificationSetAt = Date.now();
+    captureOriginalFavicons();
+    if (!originalDocumentTitle) {
+      originalDocumentTitle = stripTabTitleMark(document.title) || '';
+    }
+
+    applyCustomFavicon(getAlertFaviconSvgDataUrl());
+    document.title = `⚠ ${originalDocumentTitle}`;
+    ensureVisualObservers();
+
+    try {
+      chrome.runtime
+        .sendMessage({
+          type: 'cca-notify-alert',
+          reason,
+        })
+        .then((res) => {
+          if (res && res.ok === false && res.error) {
+            setStatus(`Falha ao emitir alerta: ${res.error}`);
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    dlog('Alerta: resposta final sem string aceita nem texto de parada:', reason);
   }
 
   /** Remove os ícones customizados e restaura o favicon e título originais da página. */
@@ -420,10 +484,11 @@
     if (
       document.title.startsWith('▶ ') ||
       document.title.startsWith('✔ ') ||
+      document.title.startsWith('⚠') ||
       document.title.startsWith('🔴 ') ||
       document.title.startsWith('● ')
     ) {
-      document.title = document.title.replace(/^[▶✔🔴●]\s*/, '');
+      document.title = stripTabTitleMark(document.title);
     }
     originalDocumentTitle = '';
 
@@ -445,14 +510,22 @@
     dlog('Visuais da aba restaurados ao padrão.');
   }
 
-  // Remove o visual de conclusão ao focar ou clicar na aba
+  // Remove o visual de conclusão/alerta ao focar ou clicar na aba
   function onUserInteractedWithTab(e) {
-    if (tabVisualState === 'finished') {
-      if (Date.now() - notificationSetAt < 600) return;
-      if (e && e.isTrusted === false) return;
-      if (e?.target && rootEl && rootEl.contains(e.target)) return;
-      clearTabVisuals();
+    if (tabVisualState !== 'finished' && tabVisualState !== 'alert') return;
+    if (Date.now() - notificationSetAt < 600) return;
+    if (e && e.isTrusted === false) return;
+    if (e?.target && rootEl && rootEl.contains(e.target)) return;
+    if (tabVisualState === 'alert' && state.armed) {
+      restoreRunningTabVisualIfNeeded();
+      try {
+        chrome.runtime.sendMessage({ type: 'cca-clear-notification' }).catch(() => {});
+      } catch {
+        // ignore
+      }
+      return;
     }
+    clearTabVisuals();
   }
 
   window.addEventListener('focus', onUserInteractedWithTab, true);
@@ -1036,6 +1109,44 @@
     );
     setFinishedTabVisual(`Texto de parada: "${state.stopText}"`);
     return true;
+  }
+
+  /** A última resposta conhecida contém o texto de parada configurado. */
+  function lastReplyContainsStopText() {
+    if (!stopTextActive()) return false;
+    const needle = state.stopText;
+    const reply = getLastAssistantReplyElement();
+    if (reply) return countIn(reply.innerText || '', needle) > 0;
+    return countStopText() > (state.stopTextBaseline ?? 0);
+  }
+
+  function finalReplyAlertKey() {
+    const reply = getLastReplySnapshot();
+    return `${reply.source}|${reply.count}|${reply.signature}`;
+  }
+
+  /**
+   * Resposta já concluída, sem nenhuma string aceita e sem o texto de parada.
+   * Emite notificação de alerta (ícone de aviso) uma vez por resposta.
+   */
+  function notifyIfFinalReplyMissingExpected(markerStatus) {
+    if (!markerStatus?.required || markerStatus.satisfied) return;
+    if (lastReplyContainsStopText()) return;
+    const key = finalReplyAlertKey();
+    if (key && key === lastAlertedReplyKey) return;
+    lastAlertedReplyKey = key;
+    const expected = parseMarkerStrings().join(', ');
+    const stop = (state.stopText || '').trim();
+    const reason = stop
+      ? `Não contém ${expected} nem o texto de parada "${stop}".`
+      : `Não contém as strings aceitas: ${expected}.`;
+    dlog('alerta: resposta final sem string aceita nem texto de parada', {
+      expected: parseMarkerStrings(),
+      stopText: stop,
+      count: markerStatus.count,
+      source: markerStatus.source,
+    });
+    setAlertTabVisual(reason);
   }
 
   function findComposer() {
@@ -1753,6 +1864,7 @@
         if (checkStopTextAndHaltAfterGeneration()) return;
         const finalMarkerStatus = responseMarkerStatus();
         if (finalMarkerStatus.required && !finalMarkerStatus.satisfied) {
+          notifyIfFinalReplyMissingExpected(finalMarkerStatus);
           state.phase = 'streaming';
           state.sawStreaming = true;
           setStatus(markerRequirementStatusHtml(finalMarkerStatus));
@@ -1823,6 +1935,7 @@
       if (checkStopTextAndHaltAfterGeneration()) return;
       const markerStatus = responseMarkerStatus();
       if (markerStatus.required && !markerStatus.satisfied) {
+        notifyIfFinalReplyMissingExpected(markerStatus);
         state.phase = 'streaming';
         state.sawStreaming = true;
         setStatus(markerRequirementStatusHtml(markerStatus));
@@ -1995,6 +2108,7 @@
     const gen = hardGenerating || isGenerating();
 
     if (gen) {
+      restoreRunningTabVisualIfNeeded();
       state.sawStreaming = true;
       if (hardGenerating) state.sawHardStreaming = true;
       state.phase = 'streaming';
@@ -2035,6 +2149,7 @@
           count: markerStatus.count,
           source: markerStatus.source,
         });
+        notifyIfFinalReplyMissingExpected(markerStatus);
         setStatus(markerRequirementStatusHtml(markerStatus));
         return;
       }
@@ -3384,6 +3499,7 @@
     state.sawStreaming = false;
     state.sawHardStreaming = false;
     state.lastSendAttemptAt = 0;
+    lastAlertedReplyKey = '';
     state.stopTextBaseline = stopTextActive() ? countStopText() : null;
     connectArmedKeepalive();
     startTimer();
@@ -3424,6 +3540,7 @@
     state.phase = 'idle';
     state.sawStreaming = false;
     state.sawHardStreaming = false;
+    lastAlertedReplyKey = '';
     state.stopTextBaseline = null;
     disconnectArmedKeepalive();
     stopTimer();
@@ -3770,6 +3887,11 @@
       return true;
     }
     if (msg?.type === 'cca-clear-notification' || msg?.type === 'cca-clear-tab-badge') {
+      if (state.armed) {
+        restoreRunningTabVisualIfNeeded();
+        sendResponse({ ok: true });
+        return true;
+      }
       clearTabVisuals();
       sendResponse({ ok: true });
       return true;
