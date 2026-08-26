@@ -328,9 +328,27 @@
     document.title = `✔ ${originalDocumentTitle}`;
     ensureVisualObservers();
 
-    // Notifica o background para gerar a notificação silenciosa no Windows e destacar a janela
+    // Notifica o background para gerar a notificação no Windows e destacar a barra de tarefas
     try {
-      chrome.runtime.sendMessage({ type: 'cca-notify-stopped', reason }).catch(() => {});
+      chrome.runtime
+        .sendMessage({
+          type: 'cca-notify-stopped',
+          reason,
+        })
+        .then((res) => {
+          if (res && res.ok === false && res.error) {
+            setStatus(`Falha ao notificar na barra de tarefas: ${res.error}`);
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    try {
+      if (typeof navigator.setAppBadge === 'function') {
+        navigator.setAppBadge().catch(() => {});
+      }
     } catch {
       // ignore
     }
@@ -395,6 +413,14 @@
       // ignore
     }
 
+    try {
+      if (typeof navigator.clearAppBadge === 'function') {
+        navigator.clearAppBadge().catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+
     dlog('Visuais da aba restaurados ao padrão.');
   }
 
@@ -403,6 +429,7 @@
     if (tabVisualState === 'finished') {
       if (Date.now() - notificationSetAt < 600) return;
       if (e && e.isTrusted === false) return;
+      if (e?.target && rootEl && rootEl.contains(e.target)) return;
       clearTabVisuals();
     }
   }
