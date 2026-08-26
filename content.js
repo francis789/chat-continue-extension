@@ -10,16 +10,25 @@
 
   const STORAGE_KEY = 'cca_settings';
   const DEFAULT_SAVED_TEXTS = [
-    'Execute o comando.',
-    'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
-    'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
+    {
+      text: 'Execute o comando.',
+      tag: 'Geral',
+    },
+    {
+      text: 'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
+      tag: 'Resumos',
+    },
+    {
+      text: 'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
+      tag: 'Mapas',
+    },
   ];
   const DEFAULT_MARKER_MAX = {
     '=ff=': 100,
     'assunto:': 0,
   };
   const DEFAULTS = {
-    text: DEFAULT_SAVED_TEXTS[0],
+    text: DEFAULT_SAVED_TEXTS[0].text,
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
@@ -423,13 +432,33 @@
 
   function normalizeSavedTexts(value) {
     if (!Array.isArray(value)) return [];
-    const unique = new Set();
+    const result = [];
+    const seenTexts = new Set();
     for (const item of value) {
-      if (typeof item !== 'string') continue;
-      const text = item.trim();
-      if (text) unique.add(text);
+      let text = '';
+      let tag = '';
+      if (typeof item === 'string') {
+        text = item.trim();
+        if (text === DEFAULT_SAVED_TEXTS[0].text) tag = 'Geral';
+        else if (text === DEFAULT_SAVED_TEXTS[1].text) tag = 'Resumos';
+        else if (text === DEFAULT_SAVED_TEXTS[2].text) tag = 'Mapas';
+        else tag = 'Geral';
+      } else if (item && typeof item === 'object') {
+        text = typeof item.text === 'string' ? item.text.trim() : '';
+        tag = typeof item.tag === 'string' ? item.tag.trim() : '';
+        if (!tag) {
+          if (text === DEFAULT_SAVED_TEXTS[0].text) tag = 'Geral';
+          else if (text === DEFAULT_SAVED_TEXTS[1].text) tag = 'Resumos';
+          else if (text === DEFAULT_SAVED_TEXTS[2].text) tag = 'Mapas';
+          else tag = 'Geral';
+        }
+      }
+      if (text && !seenTexts.has(text)) {
+        seenTexts.add(text);
+        result.push({ text, tag });
+      }
     }
-    return [...unique];
+    return result;
   }
 
   // ─── Detecção por site ───────────────────────────────────────────
@@ -3038,19 +3067,41 @@
     }
   }
 
+  function isSavedText(text) {
+    if (!text) return false;
+    return state.savedTexts.some((item) => {
+      const itemText = typeof item === 'string' ? item : item.text;
+      return itemText === text;
+    });
+  }
+
   function updateSaveTextButton() {
     const textEl = rootEl?.querySelector('#cca-text');
     const saveBtn = rootEl?.querySelector('#cca-save-text');
+    const tagWrap = rootEl?.querySelector('#cca-save-tag-wrap');
+    const tagInput = rootEl?.querySelector('#cca-save-tag');
     if (!textEl || !saveBtn) return;
     const text = textEl.value.trim();
-    const alreadySaved = !!text && state.savedTexts.includes(text);
-    saveBtn.disabled = !text || alreadySaved;
-    saveBtn.textContent = alreadySaved ? 'Já salvo' : 'Salvar texto atual';
-    saveBtn.title = !text
-      ? 'Digite um texto antes de salvar.'
-      : alreadySaved
-        ? 'Este texto já está salvo.'
+    const alreadySaved = isSavedText(text);
+
+    if (alreadySaved || !text) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Já salvo';
+      saveBtn.title = !text
+        ? 'Digite um texto antes de salvar.'
+        : 'Este texto já está salvo.';
+      if (tagWrap) tagWrap.style.display = 'none';
+    } else {
+      saveBtn.textContent = 'Salvar texto atual';
+      if (tagWrap) tagWrap.style.display = 'block';
+
+      const tag = tagInput ? tagInput.value.trim() : '';
+      const hasTag = tag.length > 0;
+      saveBtn.disabled = !hasTag;
+      saveBtn.title = !hasTag
+        ? 'Preencha o campo de tag para salvar.'
         : 'Adicionar o texto atual à lista de textos salvos.';
+    }
   }
 
   function renderSavedTexts() {
@@ -3067,7 +3118,10 @@
       return;
     }
 
-    state.savedTexts.forEach((text, index) => {
+    state.savedTexts.forEach((item, index) => {
+      const text = typeof item === 'string' ? item : item.text;
+      const tag = (typeof item === 'object' && item?.tag ? item.tag : '').trim() || 'Geral';
+
       const row = document.createElement('div');
       row.className = 'cca-saved-row';
       row.setAttribute('role', 'listitem');
@@ -3076,8 +3130,17 @@
       selectBtn.type = 'button';
       selectBtn.className = 'cca-saved-select';
       selectBtn.dataset.savedTextIndex = String(index);
-      selectBtn.title = 'Usar este texto';
-      selectBtn.textContent = text;
+      selectBtn.title = `Usar este texto [${tag}]`;
+
+      const tagBadge = document.createElement('span');
+      tagBadge.className = 'cca-saved-tag-badge';
+      tagBadge.textContent = tag;
+
+      const textBody = document.createElement('span');
+      textBody.className = 'cca-saved-text-body';
+      textBody.textContent = text;
+
+      selectBtn.append(tagBadge, textBody);
 
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
@@ -3104,21 +3167,32 @@
 
   function saveCurrentText() {
     const textEl = rootEl?.querySelector('#cca-text');
+    const tagInput = rootEl?.querySelector('#cca-save-tag');
     if (!textEl) return;
     const text = textEl.value.trim();
-    if (!text || state.savedTexts.includes(text)) {
+    if (!text || isSavedText(text)) {
       updateSaveTextButton();
       return;
     }
+
+    const tag = tagInput ? tagInput.value.trim() : '';
+    if (!tag) {
+      if (tagInput) tagInput.focus();
+      updateSaveTextButton();
+      return;
+    }
+
     textEl.value = text;
     state.text = text;
-    state.savedTexts.unshift(text);
+    state.savedTexts.unshift({ text, tag });
+    if (tagInput) tagInput.value = '';
     persistUiFields();
     renderSavedTexts();
   }
 
   function selectSavedText(index) {
-    const text = state.savedTexts[index];
+    const item = state.savedTexts[index];
+    const text = typeof item === 'string' ? item : item?.text;
     const textEl = rootEl?.querySelector('#cca-text');
     if (typeof text !== 'string' || !textEl) return;
     textEl.value = text;
@@ -3366,8 +3440,13 @@
             title="Clique para escolher um texto salvo ou digite um novo."></textarea>
           <div id="cca-saved-dropdown" data-open="0" role="dialog" aria-label="Textos salvos">
             <div class="cca-saved-header">
-              <strong>Textos salvos</strong>
-              <button type="button" id="cca-save-text">Salvar texto atual</button>
+              <div class="cca-saved-header-row">
+                <strong>Textos salvos</strong>
+                <button type="button" id="cca-save-text">Salvar texto atual</button>
+              </div>
+              <div id="cca-save-tag-wrap" class="cca-save-tag-wrap" style="display:none;">
+                <input type="text" id="cca-save-tag" placeholder="Nome da tag (obrigatório)" spellcheck="false" autocomplete="off" />
+              </div>
             </div>
             <div id="cca-saved-text-list" role="list"></div>
           </div>
@@ -3479,6 +3558,22 @@
       setSavedTextsOpen(false);
     });
 
+    const saveTagInput = rootEl.querySelector('#cca-save-tag');
+    if (saveTagInput) {
+      saveTagInput.addEventListener('input', () => {
+        updateSaveTextButton();
+      });
+      saveTagInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveCurrentText();
+        }
+      });
+      saveTagInput.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
     rootEl.querySelector('#cca-save-text').addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -3555,12 +3650,12 @@
           ? normalizeSavedTexts(s.savedTexts)
           : [];
         if (!loadedSaved.length) {
-          state.savedTexts = [...DEFAULTS.savedTexts];
+          state.savedTexts = DEFAULT_SAVED_TEXTS.map((item) => ({ ...item }));
         } else {
           const merged = [...loadedSaved];
-          for (const defText of DEFAULT_SAVED_TEXTS) {
-            if (!merged.includes(defText)) {
-              merged.push(defText);
+          for (const defItem of DEFAULT_SAVED_TEXTS) {
+            if (!merged.some((item) => item.text === defItem.text)) {
+              merged.push({ ...defItem });
             }
           }
           state.savedTexts = merged;

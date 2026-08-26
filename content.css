@@ -134,18 +134,48 @@
 
 .cca-saved-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   background: #0d1117;
   border-bottom: 1px solid #30363d;
+}
+
+.cca-saved-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .cca-saved-header strong {
   color: #8b949e;
   font-size: 11px;
   font-weight: 600;
+}
+
+.cca-save-tag-wrap {
+  margin-top: 2px;
+}
+
+#cca-save-tag {
+  width: 100% !important;
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 6px !important;
+  color: #e6edf3 !important;
+  padding: 6px 8px !important;
+  font-size: 11px !important;
+  outline: none !important;
+  box-sizing: border-box !important;
+}
+
+#cca-save-tag:focus {
+  border-color: #1f6feb !important;
+}
+
+#cca-save-tag::placeholder {
+  color: #6e7681 !important;
 }
 
 #cca-save-text {
@@ -179,7 +209,7 @@
 .cca-saved-row {
   display: flex;
   align-items: stretch;
-  min-height: 38px;
+  min-height: 48px;
   border-top: 1px solid #21262d;
 }
 
@@ -198,20 +228,47 @@
 .cca-saved-select {
   flex: 1;
   min-width: 0;
-  max-height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   overflow: hidden;
   padding: 8px 10px;
   color: #e6edf3;
   font-size: 11px;
   line-height: 1.35;
   text-align: left;
-  white-space: pre-wrap;
 }
 
 .cca-saved-select:hover,
 .cca-saved-select:focus-visible {
   background: #21262d;
   outline: none;
+}
+
+.cca-saved-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+  border: 1px solid rgba(56, 139, 253, 0.35);
+  margin-bottom: 5px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.cca-saved-text-body {
+  display: block;
+  width: 100%;
+  color: #e6edf3;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .cca-saved-delete {
