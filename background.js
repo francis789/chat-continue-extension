@@ -95,21 +95,69 @@ async function ensureContentScript(tabId) {
   }
 }
 
-// Acompanha abas com notificação visual pendente
-const notifiedTabs = new Set();
+// Acompanha abas com notificação visual pendente (tabId -> notifId)
+const notifiedTabs = new Map();
+
+function updateGlobalExtensionBadge() {
+  if (notifiedTabs.size > 0) {
+    chrome.action.setBadgeText({ text: '●' }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#e53e3e' }).catch(() => {});
+  } else {
+    chrome.action.setBadgeText({ text: '' }).catch(() => {});
+  }
+}
+
+function clearTabVisualNotification(tabId) {
+  if (tabId == null) return;
+  const notifId = notifiedTabs.get(tabId);
+  if (notifId) {
+    chrome.notifications.clear(notifId).catch(() => {});
+  }
+  notifiedTabs.delete(tabId);
+  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+  updateGlobalExtensionBadge();
+  chrome.tabs.sendMessage(tabId, { type: 'cca-clear-notification' }).catch(() => {});
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender?.tab?.id;
   const windowId = sender?.tab?.windowId;
 
+  if (msg?.type === 'cca-notify-running') {
+    if (tabId != null) {
+      chrome.action.setBadgeText({ tabId, text: '▶' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#10b981' }).catch(() => {});
+    }
+    sendResponse?.({ ok: true });
+    return true;
+  }
+
   if (msg?.type === 'cca-notify-stopped') {
     if (tabId != null) {
-      notifiedTabs.add(tabId);
-      chrome.action.setBadgeText({ tabId, text: '●' }).catch(() => {});
-      chrome.action.setBadgeBackgroundColor({ tabId, color: '#e53e3e' }).catch(() => {});
+      const notifId = `cca-stopped-${tabId}`;
+      notifiedTabs.set(tabId, notifId);
+      chrome.action.setBadgeText({ tabId, text: '✔' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#2563eb' }).catch(() => {});
+      updateGlobalExtensionBadge();
+
+      // Notificação silenciosa (sem som) para gerar o selo/bolinha no ícone do navegador na barra de tarefas do Windows
+      chrome.notifications.create(notifId, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: 'Chat Continue Auto',
+        message: msg.reason ? `Execução concluída (${msg.reason}).` : 'Execução concluída.',
+        silent: true,
+        priority: 1,
+      }).catch(() => {});
     }
     if (windowId != null) {
       chrome.windows.update(windowId, { drawAttention: true }).catch(() => {});
+    } else if (tabId != null) {
+      chrome.tabs.get(tabId).then((tab) => {
+        if (tab?.windowId != null) {
+          chrome.windows.update(tab.windowId, { drawAttention: true }).catch(() => {});
+        }
+      }).catch(() => {});
     }
     sendResponse?.({ ok: true });
     return true;
@@ -117,30 +165,59 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg?.type === 'cca-clear-notification') {
     if (tabId != null) {
-      notifiedTabs.delete(tabId);
-      chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+      clearTabVisualNotification(tabId);
     }
     sendResponse?.({ ok: true });
     return true;
   }
 });
 
-// Ao ativar/focar uma aba com notificação pendente, limpa o badge da extensão e avisa o content script
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
+// Ao ativar/focar uma aba com notificação pendente, limpa o badge e a notificação
+chrome.tabs.onActivated.addListener((activeInfo) => {
   const tabId = activeInfo.tabId;
   if (notifiedTabs.has(tabId)) {
-    notifiedTabs.delete(tabId);
-    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
-    try {
-      await chrome.tabs.sendMessage(tabId, { type: 'cca-clear-notification' });
-    } catch {
-      // ignore
+    clearTabVisualNotification(tabId);
+  }
+});
+
+// Ao focar a janela, se a aba ativa tiver notificação pendente, limpa
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  chrome.tabs.query({ windowId, active: true }, (tabs) => {
+    const activeTab = tabs?.[0];
+    if (activeTab?.id && notifiedTabs.has(activeTab.id)) {
+      clearTabVisualNotification(activeTab.id);
+    }
+  });
+});
+
+// Ao clicar na notificação, foca a aba correspondente e limpa os alertas
+chrome.notifications.onClicked.addListener((notifId) => {
+  for (const [tabId, id] of notifiedTabs.entries()) {
+    if (id === notifId) {
+      chrome.tabs.update(tabId, { active: true }).catch(() => {});
+      chrome.tabs.get(tabId).then((tab) => {
+        if (tab?.windowId) {
+          chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+        }
+      }).catch(() => {});
+      clearTabVisualNotification(tabId);
+      break;
+    }
+  }
+});
+
+chrome.notifications.onClosed.addListener((notifId) => {
+  for (const [tabId, id] of notifiedTabs.entries()) {
+    if (id === notifId) {
+      clearTabVisualNotification(tabId);
+      break;
     }
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  notifiedTabs.delete(tabId);
+  clearTabVisualNotification(tabId);
 });
 
 chrome.action.onClicked.addListener(async (tab) => {

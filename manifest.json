@@ -7,7 +7,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "scripting", "activeTab"],
+  "permissions": ["storage", "scripting", "activeTab", "notifications"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://*.chatgpt.com/*",

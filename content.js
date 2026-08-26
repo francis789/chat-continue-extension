@@ -163,18 +163,24 @@
     // contexto invalidado — segue sem versão
   }
 
-  // ─── Notificação Visual na Aba e Barra de Tarefas ──────────────────
+  // ─── Notificação Visual na Aba (Play / Check) e Barra de Tarefas ──
 
-  let notificationActive = false;
+  let tabVisualState = 'idle'; // 'idle' | 'running' | 'finished'
+  let notificationSetAt = 0;
   let originalDocumentTitle = '';
   let originalFaviconHrefs = [];
   let originalFaviconElements = [];
   let faviconObserver = null;
   let titleObserver = null;
 
-  /** Coleta os favicons originais da página antes de aplicar o badge. */
+  /** Coleta os favicons originais da página antes de aplicar o ícone customizado. */
   function captureOriginalFavicons() {
-    const links = Array.from(document.querySelectorAll("link[rel*='icon']"));
+    if (originalFaviconElements.length > 0) return;
+    const links = Array.from(
+      document.querySelectorAll(
+        "link[rel*='icon'], link[rel*='shortcut'], link[rel*='apple-touch-icon']"
+      )
+    );
     if (links.length > 0) {
       originalFaviconElements = links.map((l) => ({
         rel: l.getAttribute('rel') || 'icon',
@@ -189,145 +195,68 @@
     }
   }
 
-  /**
-   * Renderiza a imagem do favicon original (ou fallback) com a bolinha
-   * vermelha de notificação no canto superior direito usando Canvas.
-   */
-  function createBadgedFaviconDataUrl(sourceUrl) {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 32;
-      canvas.height = 32;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(null);
-        return;
-      }
-
-      function drawBadge() {
-        // Círculo branco de borda externa para alto contraste
-        ctx.beginPath();
-        ctx.arc(23, 9, 6.5, 0, 2 * Math.PI, false);
-        ctx.fillStyle = '#ffffff';
-        ctx.fill();
-
-        // Círculo vermelho interno
-        ctx.beginPath();
-        ctx.arc(23, 9, 4.5, 0, 2 * Math.PI, false);
-        ctx.fillStyle = '#e53e3e';
-        ctx.fill();
-
-        try {
-          resolve(canvas.toDataURL('image/png'));
-        } catch {
-          drawFallbackIcon();
-        }
-      }
-
-      function drawFallbackIcon() {
-        try {
-          ctx.clearRect(0, 0, 32, 32);
-          ctx.beginPath();
-          ctx.arc(16, 16, 13, 0, 2 * Math.PI, false);
-          ctx.fillStyle = '#2563eb';
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(16, 16, 5, 0, 2 * Math.PI, false);
-          ctx.fillStyle = '#ffffff';
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(23, 9, 6.5, 0, 2 * Math.PI, false);
-          ctx.fillStyle = '#ffffff';
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(23, 9, 4.5, 0, 2 * Math.PI, false);
-          ctx.fillStyle = '#e53e3e';
-          ctx.fill();
-
-          resolve(canvas.toDataURL('image/png'));
-        } catch {
-          resolve(null);
-        }
-      }
-
-      if (!sourceUrl) {
-        drawFallbackIcon();
-        return;
-      }
-
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          ctx.clearRect(0, 0, 32, 32);
-          ctx.drawImage(img, 0, 0, 32, 32);
-          drawBadge();
-        } catch {
-          drawFallbackIcon();
-        }
-      };
-      img.onerror = () => {
-        drawFallbackIcon();
-      };
-      img.src = sourceUrl;
-    });
+  /** Ícone SVG com símbolo de Play (▶) em verde para quando estiver em atividade. */
+  function getPlayFaviconSvgDataUrl() {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <circle cx="16" cy="16" r="15" fill="#0f172a"/>
+      <circle cx="16" cy="16" r="13" fill="#10b981"/>
+      <polygon points="12.5,9.5 23.5,16 12.5,22.5" fill="#ffffff"/>
+    </svg>`;
+    return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
   }
 
-  /** Aplica o favicon modificado com a bolinha no DOM. */
-  async function applyBadgedFavicon() {
-    if (!notificationActive) return;
-    const currentFavicon = originalFaviconHrefs[0] || '/favicon.ico';
-    const badgedDataUrl = await createBadgedFaviconDataUrl(currentFavicon);
-    if (!badgedDataUrl || !notificationActive) return;
+  /** Ícone SVG com símbolo de Check (✔) e bolinha de notificação para quando terminar. */
+  function getCheckFaviconSvgDataUrl() {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <defs>
+        <filter id="cca-shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#000000" flood-opacity="0.4"/>
+        </filter>
+      </defs>
+      <circle cx="16" cy="16" r="15" fill="#0f172a"/>
+      <circle cx="16" cy="16" r="13" fill="#2563eb"/>
+      <!-- Checkmark -->
+      <path d="M9 16.5l4.5 4.5 9.5-9.5" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- Bolinha de Notificação Vermelha com contorno branco -->
+      <circle cx="23" cy="9" r="6.5" fill="#ffffff" filter="url(#cca-shadow)"/>
+      <circle cx="23" cy="9" r="4.5" fill="#ef4444"/>
+    </svg>`;
+    return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  }
 
-    // Remove favicons anteriores que não tenham o identificador da extensão
-    const existing = Array.from(document.querySelectorAll("link[rel*='icon']"));
+  /** Aplica o favicon SVG customizado no DOM. */
+  function applyCustomFavicon(svgUrl) {
+    const existing = Array.from(
+      document.querySelectorAll(
+        "link[rel*='icon'], link[rel*='shortcut'], link[rel*='apple-touch-icon']"
+      )
+    );
     for (const el of existing) {
-      if (el.dataset.ccaBadged !== 'true') {
+      if (el.dataset.ccaCustom !== 'true') {
         el.remove();
       }
     }
 
-    let link = document.querySelector('link[data-cca-badged="true"]');
+    let link = document.querySelector('link[data-cca-custom="true"]');
     if (!link) {
       link = document.createElement('link');
       link.rel = 'icon';
-      link.type = 'image/png';
-      link.dataset.ccaBadged = 'true';
+      link.type = 'image/svg+xml';
+      link.dataset.ccaCustom = 'true';
       document.head.appendChild(link);
     }
-    link.href = badgedDataUrl;
+    link.href = svgUrl;
   }
 
-  /** Ativa a bolinha visual na aba e no ícone da barra de tarefas. */
-  function triggerStopNotification(reason = '') {
-    if (notificationActive) return;
-    notificationActive = true;
-
-    // 1. Captura estado original do favicon e título
-    captureOriginalFavicons();
-    if (!originalDocumentTitle) {
-      originalDocumentTitle = document.title || '';
-    }
-
-    // 2. Aplica bolinha no favicon
-    void applyBadgedFavicon();
-
-    // 3. Adiciona indicador visual no título da aba se ainda não tiver
-    if (!document.title.startsWith('● ')) {
-      document.title = `● ${document.title}`;
-    }
-
-    // 4. Observa mutações do SPA (ex.: ChatGPT/Claude alterando favicon ou título)
+  function ensureVisualObservers() {
     if (!faviconObserver) {
       faviconObserver = new MutationObserver(() => {
-        if (!notificationActive) return;
-        const currentBadged = document.querySelector('link[data-cca-badged="true"]');
-        if (!currentBadged) {
-          void applyBadgedFavicon();
+        if (tabVisualState === 'running') {
+          const current = document.querySelector('link[data-cca-custom="true"]');
+          if (!current) applyCustomFavicon(getPlayFaviconSvgDataUrl());
+        } else if (tabVisualState === 'finished') {
+          const current = document.querySelector('link[data-cca-custom="true"]');
+          if (!current) applyCustomFavicon(getCheckFaviconSvgDataUrl());
         }
       });
       faviconObserver.observe(document.head, {
@@ -340,9 +269,14 @@
 
     if (!titleObserver) {
       titleObserver = new MutationObserver(() => {
-        if (!notificationActive) return;
-        if (!document.title.startsWith('● ')) {
-          document.title = `● ${document.title}`;
+        if (tabVisualState === 'running') {
+          if (!document.title.startsWith('▶ ')) {
+            document.title = `▶ ${document.title.replace(/^[▶✔🔴●]\s*/, '')}`;
+          }
+        } else if (tabVisualState === 'finished') {
+          if (!document.title.startsWith('✔ ')) {
+            document.title = `✔ ${document.title.replace(/^[▶✔🔴●]\s*/, '')}`;
+          }
         }
       });
       const titleEl = document.querySelector('title');
@@ -350,30 +284,55 @@
         titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
       }
     }
+  }
 
-    // 5. Badging API no navegador (para o ícone na barra de tarefas)
+  /** Ativa o ícone de Play (▶) na aba enquanto a extensão estiver em atividade. */
+  function setRunningTabVisual() {
+    tabVisualState = 'running';
+    captureOriginalFavicons();
+    if (!originalDocumentTitle) {
+      originalDocumentTitle = document.title.replace(/^[▶✔🔴●]\s*/, '') || '';
+    }
+
+    applyCustomFavicon(getPlayFaviconSvgDataUrl());
+    document.title = `▶ ${originalDocumentTitle}`;
+    ensureVisualObservers();
+
     try {
-      if (navigator.setAppBadge) {
-        navigator.setAppBadge().catch(() => {});
-      }
+      chrome.runtime.sendMessage({ type: 'cca-notify-running' }).catch(() => {});
     } catch {
       // ignore
     }
+  }
 
-    // 6. Notifica o background para alertar o ícone da janela e marcar badge
+  /** Ativa o ícone de Check (✔) na aba e a notificação no Brave/barra de tarefas ao terminar. */
+  function setFinishedTabVisual(reason = '') {
+    tabVisualState = 'finished';
+    notificationSetAt = Date.now();
+    captureOriginalFavicons();
+    if (!originalDocumentTitle) {
+      originalDocumentTitle = document.title.replace(/^[▶✔🔴●]\s*/, '') || '';
+    }
+
+    applyCustomFavicon(getCheckFaviconSvgDataUrl());
+    document.title = `✔ ${originalDocumentTitle}`;
+    ensureVisualObservers();
+
+    // Notifica o background para gerar a notificação silenciosa no Windows e destacar a janela
     try {
       chrome.runtime.sendMessage({ type: 'cca-notify-stopped', reason }).catch(() => {});
     } catch {
       // ignore
     }
 
-    dlog('Notificação visual ativada (bolinha na aba e barra de tarefas):', reason);
+    dlog('Visual de conclusão ativado (ícone ✔ na aba e notificação na barra de tarefas):', reason);
   }
 
-  /** Remove as bolinhas de notificação e restaura o favicon e título originais. */
-  function clearStopNotification() {
-    if (!notificationActive) return;
-    notificationActive = false;
+  /** Remove os ícones customizados e restaura o favicon e título originais da página. */
+  function clearTabVisuals() {
+    if (tabVisualState === 'idle') return;
+    tabVisualState = 'idle';
+    notificationSetAt = 0;
 
     // Desconecta observadores
     if (faviconObserver) {
@@ -385,9 +344,9 @@
       titleObserver = null;
     }
 
-    // Remove favicon modificado
-    const badgedLinks = document.querySelectorAll('link[data-cca-badged="true"]');
-    badgedLinks.forEach((el) => el.remove());
+    // Remove favicon customizado
+    const customLinks = document.querySelectorAll('link[data-cca-custom="true"]');
+    customLinks.forEach((el) => el.remove());
 
     // Restaura favicons originais
     if (originalFaviconElements.length > 0) {
@@ -405,45 +364,40 @@
       link.href = originalFaviconHrefs[0] || '/favicon.ico';
       document.head.appendChild(link);
     }
+    originalFaviconElements = [];
+    originalFaviconHrefs = [];
 
     // Restaura título
-    if (document.title.startsWith('● ')) {
-      document.title = document.title.replace(/^●\s*/, '');
+    if (
+      document.title.startsWith('▶ ') ||
+      document.title.startsWith('✔ ') ||
+      document.title.startsWith('🔴 ') ||
+      document.title.startsWith('● ')
+    ) {
+      document.title = document.title.replace(/^[▶✔🔴●]\s*/, '');
     }
     originalDocumentTitle = '';
 
-    // Limpa badge do aplicativo na barra de tarefas
-    try {
-      if (navigator.clearAppBadge) {
-        navigator.clearAppBadge().catch(() => {});
-      }
-    } catch {
-      // ignore
-    }
-
-    // Notifica background para limpar badge da extensão
+    // Notifica background para limpar badge da extensão e notificação da barra de tarefas
     try {
       chrome.runtime.sendMessage({ type: 'cca-clear-notification' }).catch(() => {});
     } catch {
       // ignore
     }
 
-    dlog('Notificação visual removida pelo clique/foco na aba.');
+    dlog('Visuais da aba restaurados ao padrão.');
   }
 
-  // Remove a notificação assim que o usuário interagir ou focar nesta aba
-  function onUserInteractedWithTab() {
-    if (notificationActive) {
-      clearStopNotification();
+  // Remove o visual de conclusão ao focar ou clicar na aba
+  function onUserInteractedWithTab(e) {
+    if (tabVisualState === 'finished') {
+      if (Date.now() - notificationSetAt < 600) return;
+      if (e && e.isTrusted === false) return;
+      clearTabVisuals();
     }
   }
 
   window.addEventListener('focus', onUserInteractedWithTab, true);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      onUserInteractedWithTab();
-    }
-  });
   document.addEventListener('pointerdown', onUserInteractedWithTab, true);
   document.addEventListener('click', onUserInteractedWithTab, true);
   document.addEventListener('keydown', onUserInteractedWithTab, true);
@@ -1004,7 +958,7 @@
       `🛑 <strong>Resposta concluída com o texto de parada</strong>: ` +
         `"${escapeHtml(state.stopText)}". Inserções encerradas.`
     );
-    triggerStopNotification(`Texto de parada: "${state.stopText}"`);
+    setFinishedTabVisual(`Texto de parada: "${state.stopText}"`);
     return true;
   }
 
@@ -1775,7 +1729,7 @@
             `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
               `ocorrências na página. Execução parada.`
           );
-          triggerStopNotification('Limite de ocorrências atingido');
+          setFinishedTabVisual('Limite de ocorrências atingido');
           return;
         }
         const c = countMarker();
@@ -1856,7 +1810,7 @@
         `⚠️ <strong>Limite máximo atingido</strong>: ${formatExceededMessage(exceeded)} ` +
           `ocorrências na página. Execução parada.`
       );
-      triggerStopNotification('Limite de ocorrências atingido');
+      setFinishedTabVisual('Limite de ocorrências atingido');
       return true;
     }
 
@@ -2772,6 +2726,7 @@
     }
 
     state.deletingNotebooks = true;
+    setRunningTabVisual();
     // Keepalive do SW evita throttle de timers com a aba/navegador sem foco.
     connectArmedKeepalive();
     setNlmSectionOpen(true);
@@ -2905,7 +2860,7 @@
           (passes >= maxPasses ? ' · limite de tentativas' : '') +
           '.'
       );
-      triggerStopNotification('Exclusão de notebooks concluída');
+      setFinishedTabVisual('Exclusão de notebooks concluída');
     }
   }
 
@@ -2935,7 +2890,7 @@
     stopTimer();
     updateFab();
     setStatus(`Concluído. IA terminou a última resposta (${reason}).`);
-    triggerStopNotification(`Concluído (${reason})`);
+    setFinishedTabVisual(`Concluído (${reason})`);
   }
 
   // ─── Temporizador ────────────────────────────────────────────────
@@ -3289,7 +3244,7 @@
   }
 
   function start() {
-    clearStopNotification();
+    setRunningTabVisual();
     if (state.deletingNotebooks) {
       setStatus('Pare a limpeza de notebooks antes de iniciar.');
       return;
@@ -3338,7 +3293,7 @@
   }
 
   function stop() {
-    clearStopNotification();
+    clearTabVisuals();
     state.armed = false;
     state.finishing = false;
     state.remaining = 0;
@@ -3660,7 +3615,7 @@
       return true;
     }
     if (msg?.type === 'cca-clear-notification' || msg?.type === 'cca-clear-tab-badge') {
-      clearStopNotification();
+      clearTabVisuals();
       sendResponse({ ok: true });
       return true;
     }
