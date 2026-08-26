@@ -11,6 +11,14 @@
   const STORAGE_KEY = 'cca_settings';
   const DEFAULT_SAVED_TEXTS = [
     {
+      text: 'faça o sumário',
+      tag: 'Sumário',
+    },
+    {
+      text: 'faça a classificação',
+      tag: 'Sumário',
+    },
+    {
       text: 'Execute o comando.',
       tag: 'Geral',
     },
@@ -26,13 +34,14 @@
   const DEFAULT_MARKER_MAX = {
     '=ff=': 100,
     'assunto:': 0,
+    '=fim=': 1,
   };
   const DEFAULTS = {
     text: DEFAULT_SAVED_TEXTS[0].text,
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
-    marker: '=ff=;Assunto:',
+    marker: '=ff=;Assunto:;=FIM=',
     /** Mínimo de ocorrências de uma das strings aceitas na última resposta. */
     minNew: 1,
     /** Limite máximo individual por string aceita na página (0 = sem limite). */
@@ -57,6 +66,7 @@
     '=ff=; **Item',
     '=ff=;### Item',
     '=ff=; ### Item',
+    '=ff=;Assunto:',
   ]);
   const LEGACY_DEFAULT_TIMES = 4;
   const LEGACY_DEFAULT_MAX_TOTAL = 0;
@@ -457,6 +467,11 @@
     );
   }
 
+  function defaultTagForText(text) {
+    const found = DEFAULT_SAVED_TEXTS.find((item) => item.text === text);
+    return found?.tag || 'Geral';
+  }
+
   function normalizeSavedTexts(value) {
     if (!Array.isArray(value)) return [];
     const result = [];
@@ -466,19 +481,11 @@
       let tag = '';
       if (typeof item === 'string') {
         text = item.trim();
-        if (text === DEFAULT_SAVED_TEXTS[0].text) tag = 'Geral';
-        else if (text === DEFAULT_SAVED_TEXTS[1].text) tag = 'Resumos';
-        else if (text === DEFAULT_SAVED_TEXTS[2].text) tag = 'Mapas';
-        else tag = 'Geral';
+        tag = defaultTagForText(text);
       } else if (item && typeof item === 'object') {
         text = typeof item.text === 'string' ? item.text.trim() : '';
         tag = typeof item.tag === 'string' ? item.tag.trim() : '';
-        if (!tag) {
-          if (text === DEFAULT_SAVED_TEXTS[0].text) tag = 'Geral';
-          else if (text === DEFAULT_SAVED_TEXTS[1].text) tag = 'Resumos';
-          else if (text === DEFAULT_SAVED_TEXTS[2].text) tag = 'Mapas';
-          else tag = 'Geral';
-        }
+        if (!tag) tag = defaultTagForText(text);
       }
       if (text && !seenTexts.has(text)) {
         seenTexts.add(text);
@@ -824,8 +831,9 @@
     if (state.markerMax && Number.isFinite(state.markerMax[key])) {
       return Math.max(0, state.markerMax[key]);
     }
-    if (key === '=ff=') return 100;
-    if (key === 'assunto:') return 0;
+    if (Number.isFinite(DEFAULT_MARKER_MAX[key])) {
+      return Math.max(0, DEFAULT_MARKER_MAX[key]);
+    }
     return 0;
   }
 
