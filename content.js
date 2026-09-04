@@ -307,7 +307,7 @@
       if (detectedAula) {
         newLabel += ` - ${detectedAula}`;
       }
-      if (detectedCommandType && detectedCommandType !== 'CLS') {
+      if (detectedCommandType) {
         newLabel += ` - ${detectedCommandType}`;
       }
       applyDetectedClass(newLabel);
