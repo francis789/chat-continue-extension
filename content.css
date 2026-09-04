@@ -202,7 +202,7 @@
 }
 
 #cca-saved-text-list {
-  max-height: 210px;
+  max-height: 240px;
   overflow-y: auto;
 }
 
@@ -218,6 +218,7 @@
 }
 
 .cca-saved-select,
+.cca-saved-edit,
 .cca-saved-delete {
   border: none;
   border-radius: 0;
@@ -271,12 +272,37 @@
   word-break: break-word;
 }
 
+.cca-saved-edit {
+  flex: 0 0 30px;
+  border-left: 1px solid #30363d;
+  color: #8b949e;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.cca-saved-edit:hover,
+.cca-saved-edit:focus-visible {
+  background: #21262d;
+  color: #58a6ff;
+  outline: none;
+}
+
 .cca-saved-delete {
-  flex: 0 0 34px;
+  flex: 0 0 30px;
   border-left: 1px solid #30363d;
   color: #f85149;
   font-size: 19px;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
 }
 
 .cca-saved-delete:hover,
@@ -284,6 +310,95 @@
   background: #3d1618;
   color: #ffa198;
   outline: none;
+}
+
+.cca-saved-row-editing {
+  display: block;
+  padding: 8px 10px;
+  background: #11161d;
+  border-top: 1px solid #30363d;
+}
+
+.cca-saved-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cca-saved-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cca-saved-edit-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cca-saved-edit-tag,
+.cca-saved-edit-text {
+  width: 100% !important;
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 6px !important;
+  color: #e6edf3 !important;
+  padding: 5px 8px !important;
+  font-size: 11px !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+  outline: none !important;
+}
+
+.cca-saved-edit-tag:focus,
+.cca-saved-edit-text:focus {
+  border-color: #1f6feb !important;
+}
+
+.cca-saved-edit-text {
+  resize: vertical;
+  min-height: 52px;
+  line-height: 1.35;
+}
+
+.cca-saved-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.cca-saved-edit-btn {
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.cca-saved-edit-cancel {
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #c9d1d9;
+}
+
+.cca-saved-edit-cancel:hover {
+  background: #30363d;
+  color: #f0f6fc;
+}
+
+.cca-saved-edit-save {
+  border: 1px solid #1f6feb;
+  background: #1f6feb;
+  color: #fff;
+}
+
+.cca-saved-edit-save:hover {
+  background: #388bfd;
 }
 
 .cca-saved-empty {

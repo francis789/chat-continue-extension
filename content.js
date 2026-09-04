@@ -11,24 +11,20 @@
   const STORAGE_KEY = 'cca_settings';
   const DEFAULT_SAVED_TEXTS = [
     {
-      text: 'Faça a classificação.',
-      tag: 'Sumário',
-    },
-    {
-      text: 'Faça o sumário.',
-      tag: 'Sumário',
-    },
-    {
-      text: 'Execute o comando. Uma tag por linha, copiando o exemplo do COMANDO. Proibido: dois pontos (id:), wrapper =tag=(...), vírgula depois do valor, aspas no =texto=.',
-      tag: 'Mapas',
-    },
-    {
       text: 'Execute o comando.',
       tag: 'Geral',
     },
     {
       text: 'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
       tag: 'Resumos',
+    },
+    {
+      text: 'Faça a classificação.',
+      tag: 'Sumário',
+    },
+    {
+      text: 'Faça o sumário.',
+      tag: 'Sumário',
     },
   ];
   const DEFAULT_MARKER_MAX = {
@@ -37,7 +33,7 @@
     '=fim=': 1,
   };
   const DEFAULTS = {
-    text: DEFAULT_SAVED_TEXTS[0].text,
+    text: DEFAULT_SAVED_TEXTS.find((it) => it.text === 'Faça a classificação.')?.text || DEFAULT_SAVED_TEXTS[0].text,
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
@@ -70,6 +66,7 @@
     'faça o sumário',
     'faça a classificação',
     'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
+    'Execute o comando. Uma tag por linha, copiando o exemplo do COMANDO. Proibido: dois pontos (id:), wrapper =tag=(...), vírgula depois do valor, aspas no =texto=.',
   ]);
   const LEGACY_DEFAULT_MARKERS = new Set([
     '=ff=',
@@ -822,6 +819,19 @@
     return found?.tag || 'Geral';
   }
 
+  function sortSavedTexts(list) {
+    if (!Array.isArray(list)) return [];
+    return [...list].sort((a, b) => {
+      const tagA = (typeof a === 'string' ? '' : a?.tag || '').trim();
+      const tagB = (typeof b === 'string' ? '' : b?.tag || '').trim();
+      const tagComp = tagA.localeCompare(tagB, 'pt-BR', { sensitivity: 'base', numeric: true });
+      if (tagComp !== 0) return tagComp;
+      const textA = (typeof a === 'string' ? a : a?.text || '').trim();
+      const textB = (typeof b === 'string' ? b : b?.text || '').trim();
+      return textA.localeCompare(textB, 'pt-BR', { sensitivity: 'base', numeric: true });
+    });
+  }
+
   function normalizeSavedTexts(value) {
     if (!Array.isArray(value)) return [];
     const result = [];
@@ -842,7 +852,7 @@
         result.push({ text, tag });
       }
     }
-    return result;
+    return sortSavedTexts(result);
   }
 
   // ─── Detecção por site ───────────────────────────────────────────
@@ -3563,10 +3573,14 @@
     }
   }
 
+  let editingSavedTextIndex = null;
+
   function renderSavedTexts() {
     const listEl = rootEl?.querySelector('#cca-saved-text-list');
     if (!listEl) return;
     listEl.replaceChildren();
+
+    state.savedTexts = sortSavedTexts(state.savedTexts);
 
     if (state.savedTexts.length === 0) {
       const empty = document.createElement('p');
@@ -3583,7 +3597,65 @@
 
       const row = document.createElement('div');
       row.className = 'cca-saved-row';
+      row.dataset.savedRowIndex = String(index);
       row.setAttribute('role', 'listitem');
+
+      if (editingSavedTextIndex === index) {
+        row.classList.add('cca-saved-row-editing');
+
+        const editForm = document.createElement('div');
+        editForm.className = 'cca-saved-edit-form';
+
+        const tagField = document.createElement('div');
+        tagField.className = 'cca-saved-edit-field';
+        const tagLabel = document.createElement('label');
+        tagLabel.className = 'cca-saved-edit-label';
+        tagLabel.textContent = 'Tag:';
+        const tagInput = document.createElement('input');
+        tagInput.type = 'text';
+        tagInput.className = 'cca-saved-edit-tag';
+        tagInput.value = tag;
+        tagInput.placeholder = 'Nome da tag (obrigatório)';
+        tagInput.spellcheck = false;
+        tagInput.autocomplete = 'off';
+        tagField.append(tagLabel, tagInput);
+
+        const textField = document.createElement('div');
+        textField.className = 'cca-saved-edit-field';
+        const textLabel = document.createElement('label');
+        textLabel.className = 'cca-saved-edit-label';
+        textLabel.textContent = 'Texto:';
+        const textTextarea = document.createElement('textarea');
+        textTextarea.className = 'cca-saved-edit-text';
+        textTextarea.rows = 3;
+        textTextarea.value = text;
+        textTextarea.placeholder = 'Texto salvo (obrigatório)';
+        textTextarea.spellcheck = false;
+        textField.append(textLabel, textTextarea);
+
+        const actions = document.createElement('div');
+        actions.className = 'cca-saved-edit-actions';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'cca-saved-edit-btn cca-saved-edit-cancel';
+        cancelBtn.dataset.cancelEditSavedTextIndex = String(index);
+        cancelBtn.textContent = 'Cancelar';
+
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'cca-saved-edit-btn cca-saved-edit-save';
+        saveBtn.dataset.saveEditSavedTextIndex = String(index);
+        saveBtn.textContent = 'Salvar';
+
+        actions.append(cancelBtn, saveBtn);
+        editForm.append(tagField, textField, actions);
+        row.appendChild(editForm);
+        listEl.appendChild(row);
+
+        setTimeout(() => tagInput.focus(), 0);
+        return;
+      }
 
       const selectBtn = document.createElement('button');
       selectBtn.type = 'button';
@@ -3601,6 +3673,15 @@
 
       selectBtn.append(tagBadge, textBody);
 
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'cca-saved-edit';
+      editBtn.dataset.editSavedTextIndex = String(index);
+      editBtn.setAttribute('aria-label', `Editar texto salvo ${index + 1}`);
+      editBtn.title = 'Editar texto e tag';
+      editBtn.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086ZM11.189 6.25 9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064l6.286-6.286Z"/></svg>';
+
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'cca-saved-delete';
@@ -3609,7 +3690,7 @@
       deleteBtn.title = 'Excluir este texto salvo';
       deleteBtn.textContent = '×';
 
-      row.append(selectBtn, deleteBtn);
+      row.append(selectBtn, editBtn, deleteBtn);
       listEl.appendChild(row);
     });
     updateSaveTextButton();
@@ -3619,6 +3700,7 @@
     const dropdown = rootEl?.querySelector('#cca-saved-dropdown');
     const textEl = rootEl?.querySelector('#cca-text');
     if (!dropdown || !textEl) return;
+    if (!open) editingSavedTextIndex = null;
     if (open) renderSavedTexts();
     dropdown.dataset.open = open ? '1' : '0';
     textEl.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -3643,7 +3725,8 @@
 
     textEl.value = text;
     state.text = text;
-    state.savedTexts.unshift({ text, tag });
+    state.savedTexts.push({ text, tag });
+    state.savedTexts = sortSavedTexts(state.savedTexts);
     if (tagInput) tagInput.value = '';
     persistUiFields();
     renderSavedTexts();
@@ -3666,8 +3749,77 @@
   function deleteSavedText(index) {
     if (!Number.isInteger(index) || index < 0 || index >= state.savedTexts.length) return;
     state.savedTexts.splice(index, 1);
+    if (editingSavedTextIndex === index) {
+      editingSavedTextIndex = null;
+    } else if (editingSavedTextIndex !== null && editingSavedTextIndex > index) {
+      editingSavedTextIndex -= 1;
+    }
     persistUiFields();
     renderSavedTexts();
+  }
+
+  function startEditSavedText(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= state.savedTexts.length) return;
+    editingSavedTextIndex = index;
+    renderSavedTexts();
+  }
+
+  function cancelEditSavedText() {
+    editingSavedTextIndex = null;
+    renderSavedTexts();
+  }
+
+  function saveEditedSavedText(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= state.savedTexts.length) return;
+    const listEl = rootEl?.querySelector('#cca-saved-text-list');
+    if (!listEl) return;
+
+    const row = listEl.querySelector(`[data-saved-row-index="${index}"]`);
+    if (!row) return;
+
+    const tagInput = row.querySelector('.cca-saved-edit-tag');
+    const textInput = row.querySelector('.cca-saved-edit-text');
+    if (!tagInput || !textInput) return;
+
+    const newTag = tagInput.value.trim();
+    const newText = textInput.value.trim();
+
+    if (!newTag) {
+      tagInput.focus();
+      tagInput.style.borderColor = '#f85149';
+      return;
+    }
+    if (!newText) {
+      textInput.focus();
+      textInput.style.borderColor = '#f85149';
+      return;
+    }
+
+    const duplicateIndex = state.savedTexts.findIndex(
+      (item, i) => i !== index && (typeof item === 'string' ? item : item.text) === newText
+    );
+    if (duplicateIndex !== -1) {
+      alert('Já existe outro texto salvo idêntico a este.');
+      textInput.focus();
+      return;
+    }
+
+    const oldItem = state.savedTexts[index];
+    const oldText = typeof oldItem === 'string' ? oldItem : oldItem.text;
+
+    state.savedTexts[index] = { text: newText, tag: newTag };
+    state.savedTexts = sortSavedTexts(state.savedTexts);
+    editingSavedTextIndex = null;
+
+    if (state.text === oldText) {
+      state.text = newText;
+      const textEl = rootEl?.querySelector('#cca-text');
+      if (textEl) textEl.value = newText;
+    }
+
+    persistUiFields();
+    renderSavedTexts();
+    updateSaveTextButton();
   }
 
   function renderMarkerMaxInputs() {
@@ -4040,8 +4192,30 @@
       e.stopPropagation();
       saveCurrentText();
     });
-    rootEl.querySelector('#cca-saved-text-list').addEventListener('click', (e) => {
+    const savedListEl = rootEl.querySelector('#cca-saved-text-list');
+    savedListEl.addEventListener('click', (e) => {
       const target = e.target instanceof Element ? e.target : null;
+      const saveEditBtn = target?.closest('[data-save-edit-saved-text-index]');
+      if (saveEditBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        saveEditedSavedText(Number(saveEditBtn.dataset.saveEditSavedTextIndex));
+        return;
+      }
+      const cancelEditBtn = target?.closest('[data-cancel-edit-saved-text-index]');
+      if (cancelEditBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelEditSavedText();
+        return;
+      }
+      const editBtn = target?.closest('[data-edit-saved-text-index]');
+      if (editBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        startEditSavedText(Number(editBtn.dataset.editSavedTextIndex));
+        return;
+      }
       const deleteBtn = target?.closest('[data-delete-saved-text-index]');
       if (deleteBtn) {
         e.preventDefault();
@@ -4054,6 +4228,30 @@
       e.preventDefault();
       e.stopPropagation();
       selectSavedText(Number(selectBtn.dataset.savedTextIndex));
+    });
+    savedListEl.addEventListener('keydown', (e) => {
+      if (editingSavedTextIndex === null) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelEditSavedText();
+        return;
+      }
+      if (e.key === 'Enter') {
+        const target = e.target instanceof Element ? e.target : null;
+        if (target?.classList.contains('cca-saved-edit-tag')) {
+          e.preventDefault();
+          e.stopPropagation();
+          saveEditedSavedText(editingSavedTextIndex);
+        } else if (target?.classList.contains('cca-saved-edit-text') && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          saveEditedSavedText(editingSavedTextIndex);
+        }
+      }
+    });
+    savedListEl.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
     });
     document.addEventListener('pointerdown', (e) => {
       const picker = rootEl?.querySelector('#cca-text-picker');
@@ -4113,15 +4311,45 @@
             )
           : [];
         if (!loadedSaved.length) {
-          state.savedTexts = DEFAULT_SAVED_TEXTS.map((item) => ({ ...item }));
+          state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
+          if (!Array.isArray(s.savedTexts) || s.savedTexts.length !== state.savedTexts.length) {
+            try {
+              chrome.storage.local.set({
+                [STORAGE_KEY]: {
+                  ...s,
+                  savedTexts: state.savedTexts,
+                },
+              });
+            } catch {
+              // ignore
+            }
+          }
         } else {
           const merged = [...loadedSaved];
+          let addedDefaults = false;
           for (const defItem of DEFAULT_SAVED_TEXTS) {
             if (!merged.some((item) => item.text === defItem.text)) {
               merged.push({ ...defItem });
+              addedDefaults = true;
             }
           }
-          state.savedTexts = merged;
+          state.savedTexts = sortSavedTexts(merged);
+          const changed =
+            addedDefaults ||
+            !Array.isArray(s.savedTexts) ||
+            s.savedTexts.length !== state.savedTexts.length;
+          if (changed) {
+            try {
+              chrome.storage.local.set({
+                [STORAGE_KEY]: {
+                  ...s,
+                  savedTexts: state.savedTexts,
+                },
+              });
+            } catch {
+              // ignore
+            }
+          }
         }
         state.times =
           Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
