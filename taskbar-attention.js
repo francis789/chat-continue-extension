@@ -19,7 +19,7 @@
     }
   }
 
-  function paintBadge(img, label) {
+  function paintBadge(img, label, isAlert = false) {
     const size = 128;
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -28,12 +28,12 @@
     ctx.drawImage(img, 0, 0, size, size);
     const bannerH = Math.round(size * 0.44);
     const y = size - bannerH;
-    ctx.fillStyle = '#e11d48';
+    ctx.fillStyle = isAlert ? '#d97706' : '#e11d48';
     ctx.fillRect(0, y, size, bannerH);
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    let fontSize = Math.round(bannerH * 0.7);
+    let fontSize = isAlert ? Math.round(bannerH * 0.85) : Math.round(bannerH * 0.7);
     ctx.font = `700 ${fontSize}px Arial, sans-serif`;
     while (fontSize > 18 && ctx.measureText(label).width > size - 10) {
       fontSize -= 1;
@@ -44,14 +44,16 @@
   }
 
   async function apply(progress) {
+    const isAlert =
+      progress?.kind === 'alert' || new URLSearchParams(location.search).get('alert') === '1';
     const completed = Math.max(0, Number(progress?.completed) || 0);
     const total = Math.max(completed, Number(progress?.total) || completed);
-    const label = `${Math.max(1, completed)}/${Math.max(1, total)}`;
-    document.title = label;
+    const label = isAlert ? '!' : `${Math.max(1, completed)}/${Math.max(1, total)}`;
+    document.title = isAlert ? '⚠ Alerta' : label;
     if (labelEl) labelEl.textContent = label;
     try {
       if (typeof navigator.setAppBadge === 'function') {
-        navigator.setAppBadge(Math.max(1, completed)).catch(() => {});
+        navigator.setAppBadge(isAlert ? 1 : Math.max(1, completed)).catch(() => {});
       }
     } catch {
       // ignore
@@ -60,7 +62,7 @@
       const img = new Image();
       img.src = chrome.runtime.getURL('icons/icon128.png');
       await img.decode();
-      setFavicons(paintBadge(img, label));
+      setFavicons(paintBadge(img, label, isAlert));
     } catch {
       if (progress?.iconUrl) {
         const link = document.createElement('link');
@@ -72,7 +74,9 @@
   }
 
   const params = new URLSearchParams(location.search);
-  if (params.has('c') || params.has('t')) {
+  if (params.has('alert')) {
+    void apply({ kind: 'alert' });
+  } else if (params.has('c') || params.has('t')) {
     void apply({
       completed: Number(params.get('c') || 1),
       total: Number(params.get('t') || 1),

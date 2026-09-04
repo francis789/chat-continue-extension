@@ -206,6 +206,274 @@
   /** Evita reemitir o alerta da mesma resposta concluída. */
   let lastAlertedReplyKey = '';
 
+  let detectedDiscipline = '';
+  let detectedAula = '';
+  let detectedCommandType = '';
+  let detectedClassLabel = '';
+  let lastMonitoredUrl = location.href;
+  let lastClassScanAt = 0;
+
+  const FORBIDDEN_WORDS = new Set([
+    'gtm', 'height', 'width', 'style', 'class', 'id', 'iframe', 'script', 'noscript',
+    'target', 'window', 'document', 'undefined', 'null', 'http', 'https', 'www'
+  ]);
+
+  const CLS_IGNORED_TAGS = new Set([
+    'cls', 'q', 's', 'ni', 'p', 'o', 'f', 'ff', 'sumario', 'fim',
+    'q-tratada', 'qn-tratada', 'qn', 'alvos', 'fontes', 'formato', 'progresso'
+  ]);
+
+  function isValidDiscipline(disc) {
+    if (!disc || typeof disc !== 'string') return false;
+    const d = disc.trim();
+    if (d.length < 2 || d.length > 35) return false;
+    if (!/^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ0-9 \-_]{0,34}$/.test(d)) return false;
+    if (/["'<>&=\\\/;{}[\]?!%]/.test(d)) return false;
+    const lower = d.toLowerCase();
+    if (CLS_IGNORED_TAGS.has(lower) || FORBIDDEN_WORDS.has(lower)) return false;
+    for (const part of lower.split(/[\s\-_]+/)) {
+      if (FORBIDDEN_WORDS.has(part)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Extrai o tipo do comando (ex: de "COMANDO MAP-T2L49Z.md" extrai "MAP").
+   * Extrai o texto antes do último hífen antes do identificador do comando.
+   */
+  function extractCommandType(text) {
+    if (!text || typeof text !== 'string') return '';
+
+    // 1. "COMANDO <TIPO>-<ID>" (ex: "COMANDO MAP-T2L49Z.md", "COMANDO MAP - T2L49Z.md", "COMANDO CLS-GFP95M.md")
+    const cmdMatch = text.match(/\bCOMANDO[_\s\-]+([A-Za-z0-9_]+)\s*-\s*[A-Za-z0-9_]+(?:\.md|\b)/i);
+    if (cmdMatch) {
+      const raw = cmdMatch[1].trim().toUpperCase();
+      if (raw && !FORBIDDEN_WORDS.has(raw.toLowerCase())) return raw;
+    }
+
+    // 2. Arquivos de comando no formato "<TIPO>-<ID>.md" (ex: "MAP-T2L49Z.md")
+    const fileMatch = text.match(/\b([A-Za-z0-9_]{2,8})\s*-\s*[A-Za-z0-9_]{4,12}\.md\b/i);
+    if (fileMatch) {
+      const raw = fileMatch[1].trim().toUpperCase();
+      if (raw && raw !== 'AULA' && !FORBIDDEN_WORDS.has(raw.toLowerCase())) {
+        return raw;
+      }
+    }
+
+    return '';
+  }
+
+  function extractDiscipline(text) {
+    if (!text || typeof text !== 'string') return '';
+    const sepRegex = /=([A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9 \-_]{1,35}?)=([a-zA-ZÀ-ÖØ-öø-ÿ_\-]{2,25})=/g;
+    let match;
+    while ((match = sepRegex.exec(text)) !== null) {
+      const rawDisc = match[1].trim();
+      const rawType = match[2].trim().toLowerCase();
+      if (!isValidDiscipline(rawDisc)) continue;
+      if (CLS_IGNORED_TAGS.has(rawType) || FORBIDDEN_WORDS.has(rawType)) continue;
+      return rawDisc;
+    }
+    return '';
+  }
+
+  function extractAula(text) {
+    if (!text || typeof text !== 'string') return '';
+    const match = text.match(/\bAula\s*(\d+)/i);
+    return match ? match[1].padStart(2, '0') : '';
+  }
+
+  /**
+   * Atualiza o estado de disciplina, aula e comando. Reconstrói o título da aba assim que houver dados.
+   * Formato: DISCIPLINA - XX - TIPO (ex: INGLÊS - 04 - MAP, ou INGLÊS - 04 quando CLS).
+   */
+  function updateClassState(disc = '', aula = '', cmd = '') {
+    let changed = false;
+    if (disc && disc !== detectedDiscipline) {
+      detectedDiscipline = disc;
+      changed = true;
+    }
+    if (aula && aula !== detectedAula) {
+      detectedAula = aula;
+      changed = true;
+    }
+    if (cmd && cmd !== detectedCommandType) {
+      detectedCommandType = cmd;
+      changed = true;
+    }
+
+    if (changed && detectedDiscipline) {
+      let newLabel = detectedDiscipline;
+      if (detectedAula) {
+        newLabel += ` - ${detectedAula}`;
+      }
+      if (detectedCommandType && detectedCommandType !== 'CLS') {
+        newLabel += ` - ${detectedCommandType}`;
+      }
+      applyDetectedClass(newLabel);
+    }
+  }
+
+  /**
+   * Processa qualquer fragmento de texto (nomes de arquivos, inputs, chat, etc.)
+   */
+  function processTextForClassInfo(text) {
+    if (!text || typeof text !== 'string') return;
+    const cmd = extractCommandType(text);
+    const disc = extractDiscipline(text);
+    const aula = extractAula(text);
+    if (cmd || disc || aula) {
+      updateClassState(disc, aula, cmd);
+    }
+  }
+
+  function extractClassInfo(text, forcedCmdType = '') {
+    if (!text || typeof text !== 'string') return null;
+    processTextForClassInfo(text);
+    if (forcedCmdType) {
+      updateClassState('', '', forcedCmdType);
+    }
+    return detectedClassLabel || null;
+  }
+
+  function getDesiredTabTitle() {
+    const base = detectedClassLabel || originalDocumentTitle || stripTabTitleMark(document.title) || '';
+    if (tabVisualState === 'running') {
+      return `▶ ${base}`;
+    }
+    if (tabVisualState === 'finished') {
+      return `✔ ${base}`;
+    }
+    if (tabVisualState === 'alert') {
+      return `⚠ ${base}`;
+    }
+    if (detectedClassLabel) {
+      return detectedClassLabel;
+    }
+    return base;
+  }
+
+  function syncTabTitle() {
+    if (!detectedClassLabel && tabVisualState === 'idle') return;
+    const desired = getDesiredTabTitle();
+    if (desired && document.title !== desired) {
+      document.title = desired;
+    }
+  }
+
+  function sanitizeDetectedClass() {
+    if (
+      detectedClassLabel &&
+      (detectedClassLabel.includes('"') ||
+       detectedClassLabel.includes('<') ||
+       detectedClassLabel.includes('>') ||
+       detectedClassLabel.toLowerCase().includes('gtm') ||
+       detectedClassLabel.toLowerCase().includes('height'))
+    ) {
+      detectedClassLabel = '';
+      detectedDiscipline = '';
+      detectedAula = '';
+      detectedCommandType = '';
+    }
+    if (
+      originalDocumentTitle &&
+      (originalDocumentTitle.includes('"') ||
+       originalDocumentTitle.toLowerCase().includes('gtm') ||
+       originalDocumentTitle.toLowerCase().includes('height'))
+    ) {
+      originalDocumentTitle = '';
+    }
+    if (
+      document.title.includes('"') ||
+      document.title.toLowerCase().includes('gtm') ||
+      document.title.toLowerCase().includes('height')
+    ) {
+      const cleaned = stripTabTitleMark(document.title)
+        .replace(/GTM-[^\s"]*"?\s*height/gi, '')
+        .trim();
+      document.title = cleaned || 'Chat';
+    }
+  }
+
+  function applyDetectedClass(label) {
+    if (!label || label === detectedClassLabel) return;
+    if (
+      label.includes('"') ||
+      label.includes('<') ||
+      label.includes('>') ||
+      label.toLowerCase().includes('gtm') ||
+      label.toLowerCase().includes('height')
+    ) {
+      return;
+    }
+    dlog('Disciplina/Aula detectada para a aba:', label);
+    detectedClassLabel = label;
+    syncTabTitle();
+    ensureVisualObservers();
+  }
+
+  function scanForClassInfo() {
+    sanitizeDetectedClass();
+
+    // 1. Textareas e campos editáveis (onde o usuário digita ou cola)
+    const inputEls = document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]');
+    for (const input of inputEls) {
+      const val = input.value || input.innerText || '';
+      if (val && val.length < 5000) {
+        processTextForClassInfo(val);
+      }
+    }
+
+    // 2. Chips e elementos de arquivo anexado na UI do chat (ignora scripts, styles, iframes e noscripts)
+    const fileCandidates = document.querySelectorAll(
+      '[data-filename], [data-name], [title*="Aula" i], [title*="="], [title*="COMANDO" i], [aria-label*="Aula" i], [aria-label*="="], [aria-label*="COMANDO" i], [class*="attachment" i], [class*="file" i], [data-testid*="attachment" i], [data-testid*="file" i]'
+    );
+    for (const el of fileCandidates) {
+      const tag = el.tagName ? el.tagName.toLowerCase() : '';
+      if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'iframe' || tag === 'svg') continue;
+
+      const txt = el.getAttribute('data-filename') ||
+                  el.getAttribute('data-name') ||
+                  el.getAttribute('title') ||
+                  el.getAttribute('aria-label') ||
+                  (el.children.length === 0 && el.textContent.length < 300 ? el.textContent : '');
+      if (txt) {
+        processTextForClassInfo(txt);
+      }
+    }
+
+    // 3. Procura por qualquer elemento contendo "COMANDO" na página
+    try {
+      if (document.evaluate) {
+        const xpathRes = document.evaluate(
+          "//*[contains(text(), 'COMANDO') and not(self::script) and not(self::style) and not(self::noscript)]",
+          document,
+          null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+          null
+        );
+        for (let i = 0; i < xpathRes.snapshotLength; i++) {
+          const node = xpathRes.snapshotItem(i);
+          const txt = node.textContent || '';
+          if (txt && txt.length < 300) {
+            processTextForClassInfo(txt);
+          }
+        }
+      }
+    } catch {}
+
+    // 4. Mensagens enviadas pelo usuário
+    const userMessages = document.querySelectorAll(
+      '[data-message-author-role="user"], [data-testid*="user-message" i], [class*="user-message" i], [class*="human" i]'
+    );
+    for (const msgEl of userMessages) {
+      const txt = msgEl.innerText || msgEl.textContent || '';
+      if (txt && txt.length < 10000) {
+        processTextForClassInfo(txt);
+      }
+    }
+  }
+
   function stripTabTitleMark(title) {
     return String(title || '').replace(/^(?:[▶✔🔴●]|⚠\uFE0F?)\s*/, '');
   }
@@ -320,21 +588,11 @@
 
     if (!titleObserver) {
       titleObserver = new MutationObserver(() => {
-        if (tabVisualState === 'running') {
-          if (!document.title.startsWith('▶ ')) {
-            document.title = `▶ ${stripTabTitleMark(document.title)}`;
-          }
-        } else if (tabVisualState === 'finished') {
-          if (!document.title.startsWith('✔ ')) {
-            document.title = `✔ ${stripTabTitleMark(document.title)}`;
-          }
-        } else if (tabVisualState === 'alert') {
-          if (!document.title.startsWith('⚠') && !document.title.startsWith('⚠️')) {
-            document.title = `⚠ ${stripTabTitleMark(document.title)}`;
-          }
+        if (detectedClassLabel || tabVisualState !== 'idle') {
+          syncTabTitle();
         }
       });
-      const titleEl = document.querySelector('title');
+      const titleEl = document.querySelector('title') || document.head;
       if (titleEl) {
         titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
       }
@@ -350,11 +608,14 @@
     }
 
     applyCustomFavicon(getPlayFaviconSvgDataUrl());
-    document.title = `▶ ${originalDocumentTitle}`;
+    syncTabTitle();
     ensureVisualObservers();
 
     try {
-      chrome.runtime.sendMessage({ type: 'cca-notify-running' }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: 'cca-notify-running',
+        classLabel: detectedClassLabel,
+      }).catch(() => {});
     } catch {
       // ignore
     }
@@ -370,7 +631,7 @@
     }
 
     applyCustomFavicon(getCheckFaviconSvgDataUrl());
-    document.title = `✔ ${originalDocumentTitle}`;
+    syncTabTitle();
     ensureVisualObservers();
 
     // Notifica o background para gerar a notificação no Windows e destacar a barra de tarefas
@@ -379,6 +640,7 @@
         .sendMessage({
           type: 'cca-notify-stopped',
           reason,
+          classLabel: detectedClassLabel,
         })
         .then((res) => {
           if (res && res.ok === false && res.error) {
@@ -406,7 +668,7 @@
     if (tabVisualState !== 'alert') return;
     tabVisualState = 'running';
     applyCustomFavicon(getPlayFaviconSvgDataUrl());
-    document.title = `▶ ${originalDocumentTitle || stripTabTitleMark(document.title)}`;
+    syncTabTitle();
   }
 
   /** Ativa o ícone de alerta na aba e a notificação nativa com ícone de aviso. */
@@ -419,7 +681,7 @@
     }
 
     applyCustomFavicon(getAlertFaviconSvgDataUrl());
-    document.title = `⚠ ${originalDocumentTitle}`;
+    syncTabTitle();
     ensureVisualObservers();
 
     try {
@@ -427,6 +689,7 @@
         .sendMessage({
           type: 'cca-notify-alert',
           reason,
+          classLabel: detectedClassLabel,
         })
         .then((res) => {
           if (res && res.ok === false && res.error) {
@@ -443,16 +706,17 @@
 
   /** Remove os ícones customizados e restaura o favicon e título originais da página. */
   function clearTabVisuals() {
-    if (tabVisualState === 'idle') return;
+    if (tabVisualState === 'idle' && !detectedClassLabel) return;
     tabVisualState = 'idle';
     notificationSetAt = 0;
 
-    // Desconecta observadores
+    // Desconecta observador de favicon
     if (faviconObserver) {
       faviconObserver.disconnect();
       faviconObserver = null;
     }
-    if (titleObserver) {
+    // Desconecta observador de título apenas se não houver classLabel
+    if (!detectedClassLabel && titleObserver) {
       titleObserver.disconnect();
       titleObserver = null;
     }
@@ -481,7 +745,9 @@
     originalFaviconHrefs = [];
 
     // Restaura título
-    if (
+    if (detectedClassLabel) {
+      document.title = detectedClassLabel;
+    } else if (
       document.title.startsWith('▶ ') ||
       document.title.startsWith('✔ ') ||
       document.title.startsWith('⚠') ||
@@ -489,8 +755,8 @@
       document.title.startsWith('● ')
     ) {
       document.title = stripTabTitleMark(document.title);
+      originalDocumentTitle = '';
     }
-    originalDocumentTitle = '';
 
     // Notifica background para limpar badge da extensão e notificação da barra de tarefas
     try {
@@ -1126,27 +1392,50 @@
   }
 
   /**
-   * Resposta já concluída, sem nenhuma string aceita e sem o texto de parada.
-   * Emite notificação de alerta (ícone de aviso) uma vez por resposta.
+   * Interrompe a execução com alerta: para o temporizador, desarma a extensão,
+   * atualiza o status no painel e ativa o visual/notificação de alerta na aba e barra de tarefas.
    */
-  function notifyIfFinalReplyMissingExpected(markerStatus) {
+  function haltWithAlert(reason = '', markerStatus = null) {
+    state.armed = false;
+    state.finishing = false;
+    state.phase = 'idle';
+    state.pendingSend = false;
+    state.pendingSendSince = 0;
+    state.retrySend = false;
+    state.stopTextBaseline = null;
+    disconnectArmedKeepalive();
+    stopTimer();
+    updateFab();
+
+    const expected = parseMarkerStrings().join(', ');
+    const stop = (state.stopText || '').trim();
+    const detailReason = stop
+      ? `Não contém as strings aceitas (${expected}) nem o texto de parada "${stop}".`
+      : `Não contém as strings aceitas: ${expected}.`;
+
+    const statusHtml = `⚠️ <strong>Alerta: resposta sem strings aceitas</strong>. ${detailReason} Execução interrompida.`;
+    setStatus(statusHtml);
+
+    setAlertTabVisual(detailReason);
+  }
+
+  /**
+   * Resposta já concluída, sem nenhuma string aceita e sem o texto de parada.
+   * Emite notificação de alerta (ícone de aviso) e encerra a execução.
+   */
+  function notifyIfFinalReplyMissingExpected(markerStatus, reason = 'resposta sem strings aceitas') {
     if (!markerStatus?.required || markerStatus.satisfied) return;
     if (lastReplyContainsStopText()) return;
     const key = finalReplyAlertKey();
     if (key && key === lastAlertedReplyKey) return;
     lastAlertedReplyKey = key;
-    const expected = parseMarkerStrings().join(', ');
-    const stop = (state.stopText || '').trim();
-    const reason = stop
-      ? `Não contém ${expected} nem o texto de parada "${stop}".`
-      : `Não contém as strings aceitas: ${expected}.`;
     dlog('alerta: resposta final sem string aceita nem texto de parada', {
       expected: parseMarkerStrings(),
-      stopText: stop,
+      stopText: (state.stopText || '').trim(),
       count: markerStatus.count,
       source: markerStatus.source,
     });
-    setAlertTabVisual(reason);
+    haltWithAlert(reason, markerStatus);
   }
 
   function findComposer() {
@@ -1698,6 +1987,22 @@
   }
 
   function runHeartbeat(now = Date.now()) {
+    // Sincroniza e detecta disciplina/aula ao mudar de URL ou periodicamente
+    if (location.href !== lastMonitoredUrl) {
+      lastMonitoredUrl = location.href;
+      detectedDiscipline = '';
+      detectedAula = '';
+      detectedCommandType = '';
+      detectedClassLabel = '';
+      scanForClassInfo();
+    } else {
+      const needsScan = !detectedDiscipline || !detectedCommandType;
+      if (needsScan && now - lastClassScanAt >= 2000) {
+        lastClassScanAt = now;
+        scanForClassInfo();
+      }
+    }
+
     // Resolve primeiro os awaits internos que estariam throttled na aba oculta.
     // A continuação roda como microtask depois deste handler; o tick atual ainda
     // respeita pendingSend e o próximo pulso observa o novo estado.
@@ -1745,8 +2050,8 @@
           const markerStatus = responseMarkerStatus();
           if (markerStatus.required && !markerStatus.satisfied) {
             state.lastStuckNudgeAt = now;
-            setStatus(markerRequirementStatusHtml(markerStatus));
-            dlog('watchdog: aguardando string aceita; não forçando envio', markerStatus);
+            dlog('watchdog: resposta sem strings aceitas — acionando alerta e parando', markerStatus);
+            haltWithAlert('watchdog sem progresso (resposta sem strings aceitas)', markerStatus);
             return;
           }
           dlog('watchdog: sem progresso — forçando ciclo', { sinceSend });
@@ -1864,10 +2169,7 @@
         if (checkStopTextAndHaltAfterGeneration()) return;
         const finalMarkerStatus = responseMarkerStatus();
         if (finalMarkerStatus.required && !finalMarkerStatus.satisfied) {
-          notifyIfFinalReplyMissingExpected(finalMarkerStatus);
-          state.phase = 'streaming';
-          state.sawStreaming = true;
-          setStatus(markerRequirementStatusHtml(finalMarkerStatus));
+          haltWithAlert(reason, finalMarkerStatus);
           return;
         }
         finishRun(reason);
@@ -1935,10 +2237,7 @@
       if (checkStopTextAndHaltAfterGeneration()) return;
       const markerStatus = responseMarkerStatus();
       if (markerStatus.required && !markerStatus.satisfied) {
-        notifyIfFinalReplyMissingExpected(markerStatus);
-        state.phase = 'streaming';
-        state.sawStreaming = true;
-        setStatus(markerRequirementStatusHtml(markerStatus));
+        haltWithAlert(reason, markerStatus);
         return;
       }
 
@@ -2144,13 +2443,12 @@
       if (checkStopTextAndHaltAfterGeneration()) return;
       const markerStatus = responseMarkerStatus();
       if (markerStatus.required && !markerStatus.satisfied) {
-        dlog('fim detectado, aguardando string aceita', {
+        dlog('fim detectado, resposta sem strings aceitas — acionando alerta e parando', {
           reason: finishReason,
           count: markerStatus.count,
           source: markerStatus.source,
         });
-        notifyIfFinalReplyMissingExpected(markerStatus);
-        setStatus(markerRequirementStatusHtml(markerStatus));
+        haltWithAlert(finishReason, markerStatus);
         return;
       }
       dlog('fim detectado:', finishReason, {
@@ -3925,6 +4223,56 @@
 
   window.addEventListener('cca-reopen', () => openPanel());
 
+  // Listeners para detectar inserção de arquivos do classificador/mapas
+  window.addEventListener('drop', (e) => {
+    try {
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        for (const file of files) {
+          processTextForClassInfo(file.name);
+        }
+        setTimeout(scanForClassInfo, 500);
+      }
+    } catch {}
+  }, true);
+
+  window.addEventListener('change', (e) => {
+    try {
+      const files = e.target?.files;
+      if (files && files.length > 0) {
+        for (const file of files) {
+          processTextForClassInfo(file.name);
+        }
+        setTimeout(scanForClassInfo, 500);
+      }
+    } catch {}
+  }, true);
+
+  window.addEventListener('paste', (e) => {
+    try {
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        for (const file of files) {
+          processTextForClassInfo(file.name);
+        }
+      }
+      const text = e.clipboardData?.getData('text');
+      if (text) {
+        processTextForClassInfo(text);
+      }
+      setTimeout(scanForClassInfo, 500);
+    } catch {}
+  }, true);
+
+  window.addEventListener('input', (e) => {
+    try {
+      const val = e.target?.value || e.target?.innerText;
+      if (val) {
+        processTextForClassInfo(val);
+      }
+    } catch {}
+  }, true);
+
   // Ao voltar o foco/visibilidade, dispara um tick imediato (útil após minimizar).
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
@@ -3936,6 +4284,7 @@
 
   loadSettings(() => {
     buildUi();
+    scanForClassInfo();
     setInterval(runHeartbeat, POLL_MS);
   });
 })();

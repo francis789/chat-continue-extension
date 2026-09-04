@@ -151,8 +151,12 @@ function updateGlobalExtensionBadge() {
 
 function buildAlertNotificationCopy(entry) {
   const reason = entry?.reason;
+  const classLabel = entry?.classLabel;
+  const title = classLabel
+    ? `⚠️ Alerta: ${classLabel}`
+    : 'Alerta: resposta sem string aceita';
   return {
-    title: 'Alerta: resposta sem string aceita',
+    title,
     message:
       reason ||
       'A resposta final não contém as strings aceitas nem o texto de parada.',
@@ -217,9 +221,11 @@ async function getAlertIconUrl() {
 
 function buildStoppedNotificationCopy(entry, progress) {
   const reason = entry?.reason;
+  const classLabel = entry?.classLabel;
   const completed = Math.max(1, progress?.completed || 1);
   const total = Math.max(completed, progress?.total || completed);
-  const title = `${completed}/${total} abas concluídas`;
+  const prefix = classLabel ? `${classLabel} · ` : '';
+  const title = `${prefix}${completed}/${total} abas concluídas`;
   const fallback = reason
     ? `Execução concluída (${reason}).`
     : 'Execução concluída.';
@@ -350,12 +356,18 @@ async function findProgressHelperTab() {
 }
 
 async function ensureProgressHelper(progress, iconUrl) {
-  const label = formatProgressLabel(progress.completed, progress.total);
+  const isAlert = progress?.kind === 'alert';
+  const label = isAlert
+    ? '!'
+    : formatProgressLabel(progress.completed, progress.total) || '1/1';
   const url = chrome.runtime.getURL(
-    `taskbar-attention.html?c=${progress.completed}&t=${progress.total}`
+    isAlert
+      ? 'taskbar-attention.html?alert=1'
+      : `taskbar-attention.html?c=${progress.completed}&t=${progress.total}`
   );
   const payload = {
     type: 'cca-progress-icon',
+    kind: isAlert ? 'alert' : 'progress',
     completed: progress.completed,
     total: progress.total,
     iconUrl,
@@ -412,6 +424,21 @@ async function applyProgressVisuals(progress) {
   }
 
   if (progress.completed <= 0) {
+    let hasAlert = false;
+    for (const entry of notifiedTabs.values()) {
+      if (isAlertEntry(entry)) {
+        hasAlert = true;
+        break;
+      }
+    }
+    if (hasAlert) {
+      chrome.action.setBadgeText({ text: '!' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#d97706' }).catch(() => {});
+      const alertIcon = await getAlertIconUrl();
+      if (alertIcon) await setActionIconFromDataUrl(alertIcon);
+      await ensureProgressHelper({ completed: 1, total: 1, kind: 'alert' }, alertIcon);
+      return alertIcon;
+    }
     await resetActionIcon();
     await closeProgressHelper();
     return null;
@@ -567,6 +594,7 @@ async function handleNotifyStopped(msg, sender) {
     notifId,
     windowId: windowId ?? null,
     reason: msg?.reason || '',
+    classLabel: msg?.classLabel || '',
     kind: 'stopped',
     at: Date.now(),
     leftFocus: false,
@@ -627,6 +655,7 @@ async function handleNotifyAlert(msg, sender) {
     notifId,
     windowId: windowId ?? null,
     reason: msg?.reason || '',
+    classLabel: msg?.classLabel || '',
     kind: 'alert',
     at: Date.now(),
     leftFocus: false,
@@ -642,6 +671,7 @@ async function handleNotifyAlert(msg, sender) {
 
   const copy = buildAlertNotificationCopy(entry);
   const iconUrl = await getAlertIconUrl();
+  await applyProgressVisuals(getActivityProgress());
 
   try {
     await createNativeNotification(notifId, {
