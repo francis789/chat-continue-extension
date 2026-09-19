@@ -10,6 +10,8 @@
   height: auto !important;
   pointer-events: auto !important;
   color-scheme: dark;
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 #cca-root[data-hidden="1"] {
@@ -19,6 +21,12 @@
 #cca-root * {
   box-sizing: border-box;
   font-family: inherit;
+}
+
+#cca-root textarea,
+#cca-root input {
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 #cca-fab {
@@ -419,8 +427,28 @@
   color: #6e7681;
 }
 
+#cca-config-section {
+  margin-top: 6px;
+}
+
+#cca-config-toggle {
+  margin: 4px 0 2px !important;
+  padding: 6px 4px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #e6edf3 !important;
+}
+
+#cca-config-toggle:hover {
+  background: #161b22 !important;
+}
+
+#cca-config-body {
+  padding-top: 0;
+}
+
 #cca-marker-max-container {
-  margin-top: 2px;
+  margin-top: 6px;
 }
 
 #cca-marker-max-list {
@@ -550,6 +578,49 @@
   border: 1px solid #30363d !important;
 }
 
+#cca-copy-wrap {
+  margin-top: 8px;
+}
+
+#cca-copy-page {
+  width: 100% !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #30363d !important;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #161b22;
+  color: #e6edf3;
+  transition: all 0.15s ease;
+  box-sizing: border-box !important;
+}
+
+#cca-copy-page:hover {
+  background: #21262d;
+  border-color: #58a6ff !important;
+  color: #58a6ff;
+}
+
+#cca-copy-page:active {
+  transform: scale(0.98);
+}
+
+#cca-copy-page.cca-copied {
+  background: #193322 !important;
+  border-color: #238636 !important;
+  color: #3fb950 !important;
+}
+
+.cca-copy-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
 #cca-hint {
   margin-top: 8px;
   font-size: 10px;
@@ -607,7 +678,8 @@
   line-height: 1;
 }
 
-#cca-nlm-section[data-open="1"] .cca-collapse-chevron {
+#cca-nlm-section[data-open="1"] .cca-collapse-chevron,
+#cca-config-section[data-open="1"] .cca-collapse-chevron {
   transform: rotate(90deg);
 }
 
@@ -616,7 +688,8 @@
   padding-top: 2px;
 }
 
-#cca-nlm-section[data-open="1"] .cca-collapse-body {
+#cca-nlm-section[data-open="1"] .cca-collapse-body,
+#cca-config-section[data-open="1"] .cca-collapse-body {
   display: block;
 }
 

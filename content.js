@@ -51,6 +51,8 @@
     protectTitles: '',
     /** Seção NotebookLM — limpeza expandida no painel. */
     nlmSectionOpen: false,
+    /** Seção de configuração (strings aceitas e limites) expandida no painel. */
+    configSectionOpen: false,
     /** Exibir ou ocultar o ícone da extensão no site. */
     visible: true,
   };
@@ -169,6 +171,8 @@
     protectTitles: DEFAULTS.protectTitles,
     /** Seção NotebookLM — limpeza expandida. */
     nlmSectionOpen: DEFAULTS.nlmSectionOpen,
+    /** Seção de configuração expandida. */
+    configSectionOpen: DEFAULTS.configSectionOpen,
     /** Exclusão em massa de notebooks em andamento. */
     deletingNotebooks: false,
     /** Exibir ou ocultar o ícone da extensão no site. */
@@ -3528,6 +3532,7 @@
           stopText: state.stopText,
           protectTitles: state.protectTitles,
           nlmSectionOpen: state.nlmSectionOpen,
+          configSectionOpen: state.configSectionOpen,
           visible: state.visible,
         },
       });
@@ -3886,6 +3891,88 @@
     setNlmSectionOpen(!state.nlmSectionOpen);
   }
 
+  function setConfigSectionOpen(open) {
+    state.configSectionOpen = !!open;
+    const section = rootEl?.querySelector('#cca-config-section');
+    if (section) section.dataset.open = state.configSectionOpen ? '1' : '0';
+    const toggle = rootEl?.querySelector('#cca-config-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', state.configSectionOpen ? 'true' : 'false');
+    }
+    persistUiFields();
+  }
+
+  function toggleConfigSection() {
+    setConfigSectionOpen(!state.configSectionOpen);
+  }
+
+  async function copyEntirePage() {
+    const copyBtn = rootEl?.querySelector('#cca-copy-page');
+    try {
+      const selection = window.getSelection();
+      if (!selection) return;
+
+      selection.removeAllRanges();
+      const range = document.createRange();
+
+      const body = document.body;
+      if (!body) return;
+
+      // Se rootEl for filho do body, configura o range para excluir rootEl
+      if (rootEl && rootEl.parentNode === body) {
+        const rootIdx = Array.prototype.indexOf.call(body.childNodes, rootEl);
+        if (rootIdx === body.childNodes.length - 1 && rootIdx > 0) {
+          range.setStart(body, 0);
+          range.setEnd(body, rootIdx);
+        } else if (rootIdx === 0 && body.childNodes.length > 1) {
+          range.setStart(body, 1);
+          range.setEnd(body, body.childNodes.length);
+        } else {
+          range.selectNodeContents(body);
+        }
+      } else {
+        range.selectNodeContents(body);
+      }
+
+      selection.addRange(range);
+
+      let copied = false;
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        // execCommand pode falhar em alguns contextos
+      }
+
+      if (!copied && navigator.clipboard?.writeText) {
+        try {
+          const selectedText = selection.toString();
+          if (selectedText) {
+            await navigator.clipboard.writeText(selectedText);
+            copied = true;
+          }
+        } catch (err) {
+          dlog('copyEntirePage: erro no clipboard.writeText', err);
+        }
+      }
+
+      if (copyBtn) {
+        copyBtn.classList.add('cca-copied');
+        copyBtn.innerHTML = '<span class="cca-copy-icon">✓</span> Página copiada!';
+        setTimeout(() => {
+          if (copyBtn) {
+            copyBtn.classList.remove('cca-copied');
+            copyBtn.innerHTML = '<span class="cca-copy-icon">📋</span> Copiar Página';
+          }
+        }, 2000);
+      }
+
+      setStatus('Página inteira selecionada e copiada para a área de transferência!');
+    } catch (err) {
+      dlog('copyEntirePage falhou:', err);
+      setStatus('Falha ao selecionar ou copiar a página.');
+    }
+  }
+
   async function sendFirstNow(total) {
     state.pendingSend = true;
     state.pendingSendSince = Date.now();
@@ -4064,13 +4151,21 @@
             <div id="cca-saved-text-list" role="list"></div>
           </div>
         </div>
-        <label for="cca-marker" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">Strings aceitas na resposta (separe com ;) <span class="cca-info" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">ⓘ</span></label>
-        <input id="cca-marker" type="text" spellcheck="false"
-          placeholder="=ff=; Assunto:; outra string"
-          title="Exemplo: =ff=; Assunto:. A comparação ignora maiúsculas/minúsculas." />
-        <div id="cca-marker-max-container">
-          <label title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">ⓘ</span></label>
-          <div id="cca-marker-max-list" class="cca-marker-max-list"></div>
+        <div id="cca-config-section" data-open="0">
+          <button type="button" id="cca-config-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-config-body" title="Mostrar ou ocultar configurações de strings e limites">
+            <span class="cca-collapse-chevron" aria-hidden="true">▸</span>
+            <span>Configuração</span>
+          </button>
+          <div id="cca-config-body" class="cca-collapse-body" role="region" aria-labelledby="cca-config-toggle">
+            <label for="cca-marker" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">Strings aceitas na resposta (separe com ;) <span class="cca-info" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">ⓘ</span></label>
+            <input id="cca-marker" type="text" spellcheck="false"
+              placeholder="=ff=; Assunto:; outra string"
+              title="Exemplo: =ff=; Assunto:. A comparação ignora maiúsculas/minúsculas." />
+            <div id="cca-marker-max-container">
+              <label title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">ⓘ</span></label>
+              <div id="cca-marker-max-list" class="cca-marker-max-list"></div>
+            </div>
+          </div>
         </div>
         <div id="cca-row">
           <div>
@@ -4114,6 +4209,11 @@
           <button type="button" id="cca-start">Iniciar</button>
           <button type="button" id="cca-stop">Parar</button>
         </div>
+        <div id="cca-copy-wrap">
+          <button type="button" id="cca-copy-page" title="Selecionar a página inteira e copiar para a área de transferência">
+            <span class="cca-copy-icon">📋</span> Copiar Página
+          </button>
+        </div>
         <p id="cca-hint">
           A extensão sempre aguarda a IA terminar. Com a lista preenchida, o
           próximo envio só é liberado se a resposta concluída contiver pelo menos
@@ -4147,6 +4247,10 @@
     if (nlmSection) {
       nlmSection.style.display = isNotebookLM() ? '' : 'none';
       nlmSection.dataset.open = state.nlmSectionOpen ? '1' : '0';
+    }
+    const configSection = rootEl.querySelector('#cca-config-section');
+    if (configSection) {
+      configSection.dataset.open = state.configSectionOpen ? '1' : '0';
     }
     renderSavedTexts();
     renderMarkerMaxInputs();
@@ -4265,6 +4369,23 @@
     });
     rootEl.querySelector('#cca-start').addEventListener('click', start);
     rootEl.querySelector('#cca-stop').addEventListener('click', stop);
+    const copyPageBtn = rootEl.querySelector('#cca-copy-page');
+    if (copyPageBtn) {
+      copyPageBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void copyEntirePage();
+      });
+    }
+    const configToggle = rootEl.querySelector('#cca-config-toggle');
+    if (configToggle) {
+      configToggle.setAttribute('aria-expanded', state.configSectionOpen ? 'true' : 'false');
+      configToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleConfigSection();
+      });
+    }
     const nlmToggle = rootEl.querySelector('#cca-nlm-toggle');
     if (nlmToggle) {
       nlmToggle.setAttribute('aria-expanded', state.nlmSectionOpen ? 'true' : 'false');
@@ -4383,6 +4504,10 @@
           typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
         state.nlmSectionOpen =
           typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
+        state.configSectionOpen =
+          typeof s.configSectionOpen === 'boolean'
+            ? s.configSectionOpen
+            : (typeof s.markerMaxOpen === 'boolean' ? s.markerMaxOpen : DEFAULTS.configSectionOpen);
         state.visible =
           typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
         if (rootEl) {

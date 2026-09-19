@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Chat Continue Auto",
-  "version": "1.0.38",
+  "version": "1.0.40",
   "description": "Quando a IA para de gerar, insere um texto no input e envia — N vezes.",
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "scripting", "activeTab", "notifications"],
+  "permissions": ["storage", "scripting", "activeTab", "notifications", "clipboardWrite"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://*.chatgpt.com/*",
