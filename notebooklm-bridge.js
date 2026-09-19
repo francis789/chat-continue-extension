@@ -542,7 +542,8 @@
   function ensureModalButtonHighlighted() {
     if (!__armedFiles || __armedFiles.length === 0) return false;
     const dialog = getOpenDialog();
-    let uploadBtn = findUploadButton(dialog) || findUploadButton(document);
+    if (!dialog) return false;
+    let uploadBtn = findUploadButton(dialog);
     if (!uploadBtn) return false;
 
     if (uploadBtn.tagName.toLowerCase() !== 'button' && uploadBtn.tagName.toLowerCase() !== 'label') {
@@ -595,17 +596,17 @@
       );
     }
 
-    // Hook de fechamento do modal pelo usuário (botão X)
+    // Hook de fechamento do modal pelo usuário (botão X, Fechar, Cancelar)
     if (dialog && !dialog.__ccaCloseHooked) {
       dialog.__ccaCloseHooked = true;
       const closeButtons = dialog.querySelectorAll(
-        'button[aria-label*="close" i], button[aria-label*="fechar" i], button.close, [mat-dialog-close]'
+        'button[aria-label*="close" i], button[aria-label*="fechar" i], button[aria-label*="cancel" i], button.close, [mat-dialog-close]'
       );
       closeButtons.forEach((cb) => {
         cb.addEventListener(
           'click',
           () => {
-            console.log('[CCA-Bridge] Modal fechado pelo usuário via botão Fechar (X).');
+            console.log('[CCA-Bridge] Modal fechado pelo usuário via botão Fechar/Cancelar.');
             __armedFiles = null;
             stopHighlightWatcher();
             clearHighlights();
@@ -614,6 +615,23 @@
           { once: true }
         );
       });
+    }
+
+    // Hook no backdrop do CDK overlay para detectar fechamento ao clicar fora do modal
+    const backdrop = document.querySelector('.cdk-overlay-backdrop');
+    if (backdrop && !backdrop.__ccaBackdropHooked) {
+      backdrop.__ccaBackdropHooked = true;
+      backdrop.addEventListener(
+        'click',
+        () => {
+          console.log('[CCA-Bridge] Modal fechado pelo usuário via clique no backdrop.');
+          __armedFiles = null;
+          stopHighlightWatcher();
+          clearHighlights();
+          window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+        },
+        { once: true }
+      );
     }
 
     return true;
@@ -640,18 +658,36 @@
     let elapsed = 0;
     __highlightWatcherTimer = setInterval(() => {
       elapsed += 250;
-      if (!__armedFiles || elapsed > 60000) {
+      if (!__armedFiles || elapsed > 30000) {
         stopHighlightWatcher();
+        return;
+      }
+      const dialog = getOpenDialog();
+      if (!dialog) {
+        console.log('[CCA-Bridge] Modal fechado detectado pelo watcher.');
+        __armedFiles = null;
+        stopHighlightWatcher();
+        clearHighlights();
+        window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
         return;
       }
       ensureModalButtonHighlighted();
     }, 250);
 
-    // 2. MutationObserver para reagir instantaneamente quando o modal for inserido no DOM
+    // 2. MutationObserver para reagir instantaneamente quando o modal for inserido ou removido do DOM
     try {
       __highlightObserver = new MutationObserver(() => {
         if (__armedFiles && __armedFiles.length > 0) {
-          ensureModalButtonHighlighted();
+          const dialog = getOpenDialog();
+          if (dialog) {
+            ensureModalButtonHighlighted();
+          } else {
+            console.log('[CCA-Bridge] Modal fechado detectado pelo MutationObserver.');
+            __armedFiles = null;
+            stopHighlightWatcher();
+            clearHighlights();
+            window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+          }
         }
       });
       __highlightObserver.observe(document.body || document.documentElement, {

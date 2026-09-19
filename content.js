@@ -2038,14 +2038,14 @@
       }
     }
 
-    // NotebookLM: checa mudança de URL e garante que o botão do modal fique destacado
+    // NotebookLM: checa mudança de URL e garante que o botão do modal fique destacado se o modal estiver aberto
     if (isNotebookLM()) {
       if (location.href !== lastObservedUrl) {
         lastObservedUrl = location.href;
         dlog('runHeartbeat: URL alterada no NotebookLM para:', lastObservedUrl);
         void autoCaptureClipboardPath();
       } else if (isNotebookLMNotebookPage() && state.nlmSourcesPath && !userDismissedModal && lastUploadedPath !== state.nlmSourcesPath) {
-        const dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+        const dialog = getNotebookLMOpenDialog();
         if (dialog && !isNotebookLMModalButtonHighlighted()) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
         }
@@ -3461,16 +3461,41 @@
     }
   }
 
+  function getNotebookLMOpenDialog() {
+    try {
+      const candidates = Array.from(
+        document.querySelectorAll('mat-dialog-container, [role="dialog"], div[aria-modal="true"]')
+      );
+      for (const d of candidates) {
+        if (d.closest('#cca-root') || d.id?.startsWith('cca-')) continue;
+        if (d.offsetParent === null && d.offsetWidth === 0 && d.offsetHeight === 0) continue;
+        const txt = (d.textContent || '').replace(/\s+/g, ' ').toLowerCase();
+        if (
+          txt.includes('solte seus arquivos') ||
+          txt.includes('drop your files') ||
+          txt.includes('adicionar fontes') ||
+          txt.includes('add sources') ||
+          txt.includes('pesquise novas fontes') ||
+          txt.includes('enviar arquivos') ||
+          txt.includes('fazer upload') ||
+          txt.includes('upload files')
+        ) {
+          return d;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function isNotebookLMModalButtonHighlighted() {
     try {
-      const dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+      const dialog = getNotebookLMOpenDialog();
       if (dialog && dialog.querySelector('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn')) {
         return true;
       }
-      const outside = Array.from(document.querySelectorAll('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn')).find(
-        (el) => !el.closest('#cca-root') && !el.id?.startsWith('cca-')
-      );
-      return Boolean(outside);
+      return false;
     } catch (_) {
       return false;
     }
@@ -3486,6 +3511,11 @@
     if (isAutoArming) return;
     // Se o modal foi fechado pelo usuário ou a pasta já foi enviada, não re-abre nem re-arma sozinho
     if (!force && (lastUploadedPath === targetPath || userDismissedModal)) return;
+
+    // CRUCIAL: Só executa preparação se o modal de fontes do NotebookLM estiver REALMENTE aberto na tela!
+    const dialog = getNotebookLMOpenDialog();
+    if (!dialog) return;
+
     // Evita chamadas repetidas desnecessárias se o botão do modal já estiver destacado
     if (!force && lastAutoArmedPath === targetPath && isNotebookLMModalButtonHighlighted()) return;
 
@@ -3538,9 +3568,9 @@
       const clipText = (await navigator.clipboard.readText()) || '';
       const clean = clipText.trim().replace(/^["']|["']$/g, '');
       if (!clean) {
-        if (state.nlmSourcesPath) {
-          highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
+        if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
+          if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
+          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3549,9 +3579,9 @@
 
       // Evita capturar textos gigantes multilinhas (ex: prompts ou resumos gerados)
       if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
-        if (state.nlmSourcesPath) {
-          highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
+        if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
+          if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
+          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3569,18 +3599,21 @@
       }
       state.nlmSourcesPath = clean;
       persistUiFields();
-      highlightSendButton(true, clean);
+
+      if (!userDismissedModal || isNewPath) {
+        highlightSendButton(true, clean);
+      }
       dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
 
-      // Inicia imediatamente a preparação das fontes e o destaque do botão no modal do NotebookLM!
-      if (isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal) {
+      // Só prepara/destaca o botão no modal do NotebookLM se o modal de fontes já estiver aberto!
+      if (isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal && getNotebookLMOpenDialog()) {
         void autoArmAndHighlightModalUpload(clean, isNewPath);
       }
     } catch (e) {
       dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
-      if (state.nlmSourcesPath && isNotebookLM()) {
+      if (state.nlmSourcesPath && isNotebookLM() && !userDismissedModal) {
         highlightSendButton(true, state.nlmSourcesPath);
-        if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
+        if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && getNotebookLMOpenDialog()) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
         }
       }
