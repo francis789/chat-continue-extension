@@ -203,6 +203,7 @@
     settingsMenuOpen: false,
   };
 
+  let isSettingsLoaded = false;
   let rootEl = null;
   let statusEl = null;
   let fabEl = null;
@@ -4057,6 +4058,7 @@
   }
 
   function persistUiFields() {
+    if (!isSettingsLoaded) return;
     const textEl = rootEl?.querySelector('#cca-text');
     const timesEl = rootEl?.querySelector('#cca-times');
     const markerEl = rootEl?.querySelector('#cca-marker');
@@ -4761,6 +4763,10 @@
       statusEl = rootEl.querySelector('#cca-status');
       fabEl = rootEl.querySelector('#cca-fab');
       rootEl.dataset.hidden = state.visible ? '0' : '1';
+      rootEl.dataset.theme = state.theme || 'dark';
+      rootEl.dataset.invert = state.invertPanel ? '1' : '0';
+      applyTheme(state.theme);
+      applyInversion();
       return;
     }
 
@@ -4768,6 +4774,7 @@
     rootEl.id = 'cca-root';
     rootEl.dataset.hidden = state.visible ? '0' : '1';
     rootEl.dataset.theme = state.theme || 'dark';
+    rootEl.dataset.invert = state.invertPanel ? '1' : '0';
     rootEl.innerHTML = `
       <div id="cca-panel" data-open="${state.panelOpen ? '1' : '0'}">
         <div class="cca-header-row">
@@ -5369,6 +5376,9 @@
       });
     }
 
+    applyTheme(state.theme);
+    applyInversion();
+
     if (state.visible) {
       setPanelOpen(true);
     }
@@ -5384,117 +5394,125 @@
   function loadSettings(cb) {
     try {
       chrome.storage.local.get(STORAGE_KEY, (data) => {
-        const s = data?.[STORAGE_KEY] || {};
-        const saved = typeof s.text === 'string' ? s.text : '';
-        // Mantém texto personalizado; migra só o default antigo.
-        if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
-        else state.text = DEFAULTS.text;
-        const loadedSaved = Array.isArray(s.savedTexts)
-          ? normalizeSavedTexts(s.savedTexts).filter(
-              (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
-            )
-          : [];
-        if (!loadedSaved.length) {
-          state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
-          if (!Array.isArray(s.savedTexts) || s.savedTexts.length !== state.savedTexts.length) {
-            try {
-              chrome.storage.local.set({
-                [STORAGE_KEY]: {
-                  ...s,
-                  savedTexts: state.savedTexts,
-                },
-              });
-            } catch {
-              // ignore
+        isSettingsLoaded = true;
+        try {
+          const s = data?.[STORAGE_KEY] || {};
+          const saved = typeof s.text === 'string' ? s.text : '';
+          // Mantém texto personalizado; migra só o default antigo.
+          if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
+          else state.text = DEFAULTS.text;
+          const loadedSaved = Array.isArray(s.savedTexts)
+            ? normalizeSavedTexts(s.savedTexts).filter(
+                (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
+              )
+            : [];
+          if (!loadedSaved.length) {
+            state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
+            if (!Array.isArray(s.savedTexts) || s.savedTexts.length !== state.savedTexts.length) {
+              try {
+                chrome.storage.local.set({
+                  [STORAGE_KEY]: {
+                    ...s,
+                    savedTexts: state.savedTexts,
+                  },
+                });
+              } catch {
+                // ignore
+              }
+            }
+          } else {
+            const merged = [...loadedSaved];
+            let addedDefaults = false;
+            for (const defItem of DEFAULT_SAVED_TEXTS) {
+              if (!merged.some((item) => item.text === defItem.text)) {
+                merged.push({ ...defItem });
+                addedDefaults = true;
+              }
+            }
+            state.savedTexts = sortSavedTexts(merged);
+            const changed =
+              addedDefaults ||
+              !Array.isArray(s.savedTexts) ||
+              s.savedTexts.length !== state.savedTexts.length;
+            if (changed) {
+              try {
+                chrome.storage.local.set({
+                  [STORAGE_KEY]: {
+                    ...s,
+                    savedTexts: state.savedTexts,
+                  },
+                });
+              } catch {
+                // ignore
+              }
             }
           }
-        } else {
-          const merged = [...loadedSaved];
-          let addedDefaults = false;
-          for (const defItem of DEFAULT_SAVED_TEXTS) {
-            if (!merged.some((item) => item.text === defItem.text)) {
-              merged.push({ ...defItem });
-              addedDefaults = true;
+          state.times =
+            Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
+              ? s.times
+              : DEFAULTS.times;
+          state.marker =
+            typeof s.marker === 'string'
+              ? LEGACY_DEFAULT_MARKERS.has(s.marker)
+                ? DEFAULTS.marker
+                : s.marker
+              : DEFAULTS.marker;
+          state.minNew =
+            Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
+          state.markerMax = { ...DEFAULTS.markerMax };
+          if (s.markerMax && typeof s.markerMax === 'object' && !Array.isArray(s.markerMax)) {
+            for (const [k, v] of Object.entries(s.markerMax)) {
+              if (Number.isFinite(v) && v >= 0) {
+                state.markerMax[markerKey(k)] = v;
+              }
             }
+          } else if (
+            Number.isFinite(s.maxTotal) &&
+            s.maxTotal > 0 &&
+            s.maxTotal !== LEGACY_DEFAULT_MAX_TOTAL
+          ) {
+            state.markerMax['=ff='] = s.maxTotal;
           }
-          state.savedTexts = sortSavedTexts(merged);
-          const changed =
-            addedDefaults ||
-            !Array.isArray(s.savedTexts) ||
-            s.savedTexts.length !== state.savedTexts.length;
-          if (changed) {
-            try {
-              chrome.storage.local.set({
-                [STORAGE_KEY]: {
-                  ...s,
-                  savedTexts: state.savedTexts,
-                },
-              });
-            } catch {
-              // ignore
-            }
+          state.stopText =
+            typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
+          state.protectTitles =
+            typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
+          state.nlmSectionOpen =
+            typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
+          state.nlmSourcesSectionOpen =
+            typeof s.nlmSourcesSectionOpen === 'boolean' ? s.nlmSourcesSectionOpen : DEFAULTS.nlmSourcesSectionOpen;
+          state.nlmSourcesPath =
+            typeof s.nlmSourcesPath === 'string' ? s.nlmSourcesPath : DEFAULTS.nlmSourcesPath;
+          state.configSectionOpen =
+            typeof s.configSectionOpen === 'boolean'
+              ? s.configSectionOpen
+              : (typeof s.markerMaxOpen === 'boolean' ? s.markerMaxOpen : DEFAULTS.configSectionOpen);
+          state.visible =
+            typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
+          state.panelOpen = state.visible ? true : false;
+          state.theme = s.theme === 'light' ? 'light' : 'dark';
+          state.invertPage = typeof s.invertPage === 'boolean' ? s.invertPage : DEFAULTS.invertPage;
+          state.invertPanel = typeof s.invertPanel === 'boolean' ? s.invertPanel : DEFAULTS.invertPanel;
+          state.autoUploadFiles = typeof s.autoUploadFiles === 'boolean' ? s.autoUploadFiles : DEFAULTS.autoUploadFiles;
+          applyInversion();
+          if (rootEl) {
+            rootEl.dataset.hidden = state.visible ? '0' : '1';
+            if (state.visible) setPanelOpen(true);
+            applyTheme(state.theme);
+            const autoUploadEl = rootEl.querySelector('#cca-auto-upload-files');
+            if (autoUploadEl) autoUploadEl.checked = state.autoUploadFiles;
+            const autoUploadSectionEl = rootEl.querySelector('#cca-auto-upload-files-section');
+            if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
           }
+          cb();
+        } catch (innerErr) {
+          console.error('[CCA] Erro ao carregar configurações:', innerErr);
+          cb();
         }
-        state.times =
-          Number.isFinite(s.times) && s.times !== LEGACY_DEFAULT_TIMES && s.times >= 1
-            ? s.times
-            : DEFAULTS.times;
-        state.marker =
-          typeof s.marker === 'string'
-            ? LEGACY_DEFAULT_MARKERS.has(s.marker)
-              ? DEFAULTS.marker
-              : s.marker
-            : DEFAULTS.marker;
-        state.minNew =
-          Number.isFinite(s.minNew) && s.minNew >= 1 ? s.minNew : DEFAULTS.minNew;
-        state.markerMax = { ...DEFAULTS.markerMax };
-        if (s.markerMax && typeof s.markerMax === 'object' && !Array.isArray(s.markerMax)) {
-          for (const [k, v] of Object.entries(s.markerMax)) {
-            if (Number.isFinite(v) && v >= 0) {
-              state.markerMax[markerKey(k)] = v;
-            }
-          }
-        } else if (
-          Number.isFinite(s.maxTotal) &&
-          s.maxTotal > 0 &&
-          s.maxTotal !== LEGACY_DEFAULT_MAX_TOTAL
-        ) {
-          state.markerMax['=ff='] = s.maxTotal;
-        }
-        state.stopText =
-          typeof s.stopText === 'string' ? s.stopText : DEFAULTS.stopText;
-        state.protectTitles =
-          typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
-        state.nlmSectionOpen =
-          typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
-        state.nlmSourcesSectionOpen =
-          typeof s.nlmSourcesSectionOpen === 'boolean' ? s.nlmSourcesSectionOpen : DEFAULTS.nlmSourcesSectionOpen;
-        state.nlmSourcesPath =
-          typeof s.nlmSourcesPath === 'string' ? s.nlmSourcesPath : DEFAULTS.nlmSourcesPath;
-        state.configSectionOpen =
-          typeof s.configSectionOpen === 'boolean'
-            ? s.configSectionOpen
-            : (typeof s.markerMaxOpen === 'boolean' ? s.markerMaxOpen : DEFAULTS.configSectionOpen);
-        state.visible =
-          typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
-        state.panelOpen = state.visible ? true : false;
-        state.theme = s.theme === 'light' ? 'light' : 'dark';
-        state.invertPage = typeof s.invertPage === 'boolean' ? s.invertPage : DEFAULTS.invertPage;
-        state.invertPanel = typeof s.invertPanel === 'boolean' ? s.invertPanel : DEFAULTS.invertPanel;
-        state.autoUploadFiles = typeof s.autoUploadFiles === 'boolean' ? s.autoUploadFiles : DEFAULTS.autoUploadFiles;
-        applyInversion();
-        if (rootEl) {
-          rootEl.dataset.hidden = state.visible ? '0' : '1';
-          if (state.visible) setPanelOpen(true);
-          applyTheme(state.theme);
-          const autoUploadEl = rootEl.querySelector('#cca-auto-upload-files');
-          if (autoUploadEl) autoUploadEl.checked = state.autoUploadFiles;
-          const autoUploadSectionEl = rootEl.querySelector('#cca-auto-upload-files-section');
-          if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
-        }
-        cb();
       });
-    } catch {
+    } catch (outerErr) {
+      isSettingsLoaded = true;
+      console.error('[CCA] Falha ao ler chrome.storage.local:', outerErr);
       cb();
     }
   }
@@ -5558,6 +5576,17 @@
           if (autoUploadEl) autoUploadEl.checked = state.autoUploadFiles;
           const autoUploadSectionEl = rootEl?.querySelector('#cca-auto-upload-files-section');
           if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
+        }
+        if (typeof newVal.theme === 'string' && newVal.theme !== state.theme) {
+          applyTheme(newVal.theme);
+        }
+        if (typeof newVal.invertPage === 'boolean' && newVal.invertPage !== state.invertPage) {
+          state.invertPage = newVal.invertPage;
+          applyInversion();
+        }
+        if (typeof newVal.invertPanel === 'boolean' && newVal.invertPanel !== state.invertPanel) {
+          state.invertPanel = newVal.invertPanel;
+          applyInversion();
         }
       }
     });
