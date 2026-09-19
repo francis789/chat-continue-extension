@@ -13,18 +13,22 @@
     {
       text: 'Execute o comando.',
       tag: 'Geral',
+      keywords: '',
     },
     {
       text: 'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
       tag: 'Resumos',
+      keywords: 'resumo, resumos',
     },
     {
       text: 'Faça a classificação.',
       tag: 'Sumário',
+      keywords: 'classificacao, classificação, cls',
     },
     {
       text: 'Faça o sumário.',
       tag: 'Sumário',
+      keywords: 'sumario, sumário, map',
     },
   ];
   const DEFAULT_MARKER_MAX = {
@@ -849,11 +853,20 @@
     return found?.tag || 'Geral';
   }
 
+  function defaultKeywordsForText(text) {
+    const found = DEFAULT_SAVED_TEXTS.find((item) => item.text === text);
+    return found?.keywords || '';
+  }
+
   function sortSavedTexts(list) {
     if (!Array.isArray(list)) return [];
     return [...list].sort((a, b) => {
       const tagA = (typeof a === 'string' ? '' : a?.tag || '').trim();
       const tagB = (typeof b === 'string' ? '' : b?.tag || '').trim();
+      const isGeralA = tagA.toLowerCase() === 'geral';
+      const isGeralB = tagB.toLowerCase() === 'geral';
+      if (isGeralA && !isGeralB) return -1;
+      if (!isGeralA && isGeralB) return 1;
       const tagComp = tagA.localeCompare(tagB, 'pt-BR', { sensitivity: 'base', numeric: true });
       if (tagComp !== 0) return tagComp;
       const textA = (typeof a === 'string' ? a : a?.text || '').trim();
@@ -869,20 +882,198 @@
     for (const item of value) {
       let text = '';
       let tag = '';
+      let keywords = '';
       if (typeof item === 'string') {
         text = item.trim();
         tag = defaultTagForText(text);
+        keywords = defaultKeywordsForText(text);
       } else if (item && typeof item === 'object') {
         text = typeof item.text === 'string' ? item.text.trim() : '';
         tag = typeof item.tag === 'string' ? item.tag.trim() : '';
         if (!tag) tag = defaultTagForText(text);
+        keywords =
+          typeof item.keywords === 'string'
+            ? item.keywords.trim()
+            : defaultKeywordsForText(text);
       }
       if (text && !seenTexts.has(text)) {
         seenTexts.add(text);
-        result.push({ text, tag });
+        result.push({ text, tag, keywords });
       }
     }
     return sortSavedTexts(result);
+  }
+
+  // ─── Busca de Palavras nos Títulos dos Arquivos e Fallback Geral ─────────────
+
+  let lastProcessedPathForInput = '';
+  let lastProcessedFilesSigForInput = '';
+
+  function normalizeSearchKeyword(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  function getKeywordsList(item) {
+    const raw = typeof item === 'object' && item?.keywords ? String(item.keywords) : '';
+    if (!raw.trim()) return [];
+    return raw
+      .split(/[,;\n]+/)
+      .map(normalizeSearchKeyword)
+      .filter(Boolean);
+  }
+
+  function getGeralSavedText() {
+    if (!Array.isArray(state.savedTexts) || state.savedTexts.length === 0) {
+      return DEFAULTS.text;
+    }
+    const geralItem = state.savedTexts.find((item) => {
+      const tag = (typeof item === 'object' && item?.tag ? item.tag : '').trim().toLowerCase();
+      return tag === 'geral';
+    });
+    if (geralItem) {
+      return typeof geralItem === 'string' ? geralItem : geralItem.text;
+    }
+    const first = state.savedTexts[0];
+    return typeof first === 'string' ? first : first?.text || DEFAULTS.text;
+  }
+
+  /**
+   * Procura palavras-chave dos textos salvos nos títulos dos arquivos.
+   * Se localizadas, retorna o(s) texto(s) correspondente(s).
+   * Caso não sejam localizadas, retorna o texto da tag Geral (definida como principal).
+   */
+  function findMatchingSavedText(files) {
+    if (!Array.isArray(files) || files.length === 0) {
+      return { text: getGeralSavedText(), isFallback: true, matchedCount: 0, tags: ['Geral'] };
+    }
+    if (!Array.isArray(state.savedTexts) || state.savedTexts.length === 0) {
+      return { text: DEFAULTS.text, isFallback: true, matchedCount: 0, tags: ['Geral'] };
+    }
+
+    const fileNames = files
+      .map((f) => {
+        const name = typeof f === 'string' ? f : f?.name || '';
+        return {
+          raw: name,
+          norm: normalizeSearchKeyword(name),
+        };
+      })
+      .filter((f) => f.norm);
+
+    if (fileNames.length === 0) {
+      return { text: getGeralSavedText(), isFallback: true, matchedCount: 0, tags: ['Geral'] };
+    }
+
+    const matchingTexts = [];
+    const matchedTags = [];
+
+    for (const item of state.savedTexts) {
+      const kws = getKeywordsList(item);
+      if (kws.length === 0) continue;
+
+      const itemMatches = kws.some((kw) => {
+        return fileNames.some((f) => f.norm.includes(kw));
+      });
+
+      if (itemMatches) {
+        const text = typeof item === 'string' ? item : item?.text;
+        const tag = typeof item === 'object' && item?.tag ? item.tag : '';
+        if (text && !matchingTexts.includes(text)) {
+          matchingTexts.push(text);
+          if (tag) matchedTags.push(tag);
+        }
+      }
+    }
+
+    if (matchingTexts.length > 0) {
+      return {
+        text: matchingTexts.join('\n'),
+        isFallback: false,
+        matchedCount: matchingTexts.length,
+        tags: matchedTags,
+      };
+    }
+
+    // Palavras não localizadas nos títulos: seleciona o texto da tag Geral (definida como principal)
+    return {
+      text: getGeralSavedText(),
+      isFallback: true,
+      matchedCount: 0,
+      tags: ['Geral'],
+    };
+  }
+
+  function applyMatchingSavedText(matchedText, reason = '') {
+    if (typeof matchedText !== 'string' || !matchedText) return false;
+    state.text = matchedText;
+    const textEl = rootEl?.querySelector('#cca-text');
+    if (textEl) {
+      textEl.value = matchedText;
+    }
+    persistUiFields();
+    updateSaveTextButton();
+    dlog(`[CCA] Input do texto a inserir atualizado (${reason}):`, matchedText);
+    return true;
+  }
+
+  function checkAndUpdateInputWithFiles(files, pathOrSource = '', force = false) {
+    if (!Array.isArray(files) || files.length === 0) return;
+    const cleanSource = String(pathOrSource || '').trim();
+    if (!force && cleanSource && cleanSource === lastProcessedPathForInput) {
+      return;
+    }
+    if (cleanSource) {
+      lastProcessedPathForInput = cleanSource;
+    }
+
+    const result = findMatchingSavedText(files);
+    if (result && result.text) {
+      const desc = result.isFallback
+        ? `tag Geral (principal, nenhuma palavra localizada)`
+        : `palavras localizadas nos arquivos [${result.tags.join(', ')}]`;
+      applyMatchingSavedText(result.text, desc);
+    }
+  }
+
+  function checkAndUpdateInputForPath(targetPath, force = false) {
+    if (!targetPath) return;
+    const clean = targetPath.trim().replace(/^["']|["']$/g, '');
+    if (!clean || clean.includes('\n') || clean.includes('\r') || clean.length > 500) return;
+    if (!force && clean === lastProcessedPathForInput) return;
+
+    // Registra imediatamente para evitar chamadas redundantes para o mesmo caminho
+    lastProcessedPathForInput = clean;
+
+    try {
+      chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: clean }, (res) => {
+        if (!res?.ok || !Array.isArray(res.files) || res.files.length === 0) {
+          if (res?.error === 'no_handle') {
+            if (lastProcessedPathForInput === clean) {
+              lastProcessedPathForInput = '';
+            }
+          }
+          return;
+        }
+        checkAndUpdateInputWithFiles(res.files, clean, true);
+      });
+    } catch (_) {
+      if (lastProcessedPathForInput === clean) {
+        lastProcessedPathForInput = '';
+      }
+    }
+  }
+
+  function checkAndUpdateInputFromDroppedFiles(files) {
+    if (!files || files.length === 0) return;
+    const names = Array.from(files).map((f) => f.name).sort().join('|');
+    if (names && names === lastProcessedFilesSigForInput) return;
+    lastProcessedFilesSigForInput = names;
+    checkAndUpdateInputWithFiles(Array.from(files), `arquivos-drag-drop:${names}`);
   }
 
   // ─── Detecção por site ───────────────────────────────────────────
@@ -3553,6 +3744,8 @@
           return;
         }
 
+        checkAndUpdateInputWithFiles(files, targetPath);
+
         setStatus(`📁 <strong>${files.length}</strong> arquivo(s) prontos em "${res.folderName}". Destacando botão no modal…`);
         try {
           const result = await uploadFilesToNotebookLM(files, 'file');
@@ -3615,6 +3808,10 @@
       }
       dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
 
+      if (isNewPath) {
+        checkAndUpdateInputForPath(clean);
+      }
+
       // Só prepara/destaca o botão no modal do NotebookLM se envio automático estiver ativo e o modal de fontes já estiver aberto!
       if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal && getNotebookLMOpenDialog()) {
         void autoArmAndHighlightModalUpload(clean, isNewPath);
@@ -3661,6 +3858,7 @@
     }
     state.nlmSourcesPath = clipText;
     persistUiFields();
+    checkAndUpdateInputForPath(clipText);
 
     await executeAddSources(clipText, mode);
   }
@@ -3680,6 +3878,7 @@
     if (inputEl) inputEl.value = path;
     state.nlmSourcesPath = path;
     persistUiFields();
+    checkAndUpdateInputForPath(path);
     await executeAddSources(path, mode);
   }
 
@@ -3717,6 +3916,8 @@
         setStatus(`Nenhum arquivo encontrado em "${res.folderName}".`);
         return;
       }
+
+      checkAndUpdateInputWithFiles(files, targetPath);
 
       setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${res.folderName}". Abrindo modal e preparando envio ${actionDesc}…`);
 
@@ -4256,6 +4457,7 @@
     state.savedTexts.forEach((item, index) => {
       const text = typeof item === 'string' ? item : item.text;
       const tag = (typeof item === 'object' && item?.tag ? item.tag : '').trim() || 'Geral';
+      const keywords = (typeof item === 'object' && item?.keywords ? item.keywords : '').trim();
 
       const row = document.createElement('div');
       row.className = 'cca-saved-row';
@@ -4281,6 +4483,21 @@
         tagInput.spellcheck = false;
         tagInput.autocomplete = 'off';
         tagField.append(tagLabel, tagInput);
+
+        const kwField = document.createElement('div');
+        kwField.className = 'cca-saved-edit-field';
+        const kwLabel = document.createElement('label');
+        kwLabel.className = 'cca-saved-edit-label';
+        kwLabel.textContent = 'Palavras nos arquivos:';
+        const kwInput = document.createElement('input');
+        kwInput.type = 'text';
+        kwInput.className = 'cca-saved-edit-keywords';
+        kwInput.value = keywords;
+        kwInput.placeholder = 'Ex: resumo, mapa, aula (sep. por vírgula)';
+        kwInput.title = 'Palavras que, se encontradas no título dos arquivos da pasta, selecionarão este texto automaticamente';
+        kwInput.spellcheck = false;
+        kwInput.autocomplete = 'off';
+        kwField.append(kwLabel, kwInput);
 
         const textField = document.createElement('div');
         textField.className = 'cca-saved-edit-field';
@@ -4311,7 +4528,7 @@
         saveBtn.textContent = 'Salvar';
 
         actions.append(cancelBtn, saveBtn);
-        editForm.append(tagField, textField, actions);
+        editForm.append(tagField, kwField, textField, actions);
         row.appendChild(editForm);
         listEl.appendChild(row);
 
@@ -4325,22 +4542,41 @@
       selectBtn.dataset.savedTextIndex = String(index);
       selectBtn.title = `Usar este texto [${tag}]`;
 
+      const rowHeader = document.createElement('div');
+      rowHeader.className = 'cca-saved-row-header';
+
       const tagBadge = document.createElement('span');
       tagBadge.className = 'cca-saved-tag-badge';
-      tagBadge.textContent = tag;
+      const isGeral = tag.toLowerCase() === 'geral';
+      if (isGeral) {
+        tagBadge.classList.add('cca-saved-tag-badge-geral');
+        tagBadge.title = 'Tag Geral (Principal / Padrão)';
+        tagBadge.textContent = '★ Geral';
+      } else {
+        tagBadge.textContent = tag;
+      }
+      rowHeader.appendChild(tagBadge);
+
+      if (keywords) {
+        const kwBadge = document.createElement('span');
+        kwBadge.className = 'cca-saved-keywords-badge';
+        kwBadge.title = `Palavras buscadas nos títulos dos arquivos: ${keywords}`;
+        kwBadge.textContent = `📁 ${keywords}`;
+        rowHeader.appendChild(kwBadge);
+      }
 
       const textBody = document.createElement('span');
       textBody.className = 'cca-saved-text-body';
       textBody.textContent = text;
 
-      selectBtn.append(tagBadge, textBody);
+      selectBtn.append(rowHeader, textBody);
 
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
       editBtn.className = 'cca-saved-edit';
       editBtn.dataset.editSavedTextIndex = String(index);
       editBtn.setAttribute('aria-label', `Editar texto salvo ${index + 1}`);
-      editBtn.title = 'Editar texto e tag';
+      editBtn.title = 'Editar texto, tag e palavras';
       editBtn.innerHTML =
         '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.086ZM11.189 6.25 9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064l6.286-6.286Z"/></svg>';
 
@@ -4371,6 +4607,7 @@
   function saveCurrentText() {
     const textEl = rootEl?.querySelector('#cca-text');
     const tagInput = rootEl?.querySelector('#cca-save-tag');
+    const kwInput = rootEl?.querySelector('#cca-save-keywords');
     if (!textEl) return;
     const text = textEl.value.trim();
     if (!text || isSavedText(text)) {
@@ -4385,11 +4622,14 @@
       return;
     }
 
+    const keywords = kwInput ? kwInput.value.trim() : '';
+
     textEl.value = text;
     state.text = text;
-    state.savedTexts.push({ text, tag });
+    state.savedTexts.push({ text, tag, keywords });
     state.savedTexts = sortSavedTexts(state.savedTexts);
     if (tagInput) tagInput.value = '';
+    if (kwInput) kwInput.value = '';
     persistUiFields();
     renderSavedTexts();
   }
@@ -4440,10 +4680,12 @@
     if (!row) return;
 
     const tagInput = row.querySelector('.cca-saved-edit-tag');
+    const kwInput = row.querySelector('.cca-saved-edit-keywords');
     const textInput = row.querySelector('.cca-saved-edit-text');
     if (!tagInput || !textInput) return;
 
     const newTag = tagInput.value.trim();
+    const newKeywords = kwInput ? kwInput.value.trim() : '';
     const newText = textInput.value.trim();
 
     if (!newTag) {
@@ -4469,7 +4711,7 @@
     const oldItem = state.savedTexts[index];
     const oldText = typeof oldItem === 'string' ? oldItem : oldItem.text;
 
-    state.savedTexts[index] = { text: newText, tag: newTag };
+    state.savedTexts[index] = { text: newText, tag: newTag, keywords: newKeywords };
     state.savedTexts = sortSavedTexts(state.savedTexts);
     editingSavedTextIndex = null;
 
@@ -4902,6 +5144,7 @@
               </div>
               <div id="cca-save-tag-wrap" class="cca-save-tag-wrap" style="display:none;">
                 <input type="text" id="cca-save-tag" placeholder="Nome da tag (obrigatório)" spellcheck="false" autocomplete="off" />
+                <input type="text" id="cca-save-keywords" placeholder="Palavras nos títulos dos arquivos (ex: resumo, mapa)" spellcheck="false" autocomplete="off" title="Palavras que, se encontradas no título dos arquivos da pasta, selecionarão este texto automaticamente (separe por vírgula)" />
               </div>
             </div>
             <div id="cca-saved-text-list" role="list"></div>
@@ -5096,6 +5339,19 @@
         }
       });
       saveTagInput.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
+    const saveKeywordsInput = rootEl.querySelector('#cca-save-keywords');
+    if (saveKeywordsInput) {
+      saveKeywordsInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveCurrentText();
+        }
+      });
+      saveKeywordsInput.addEventListener('click', (e) => {
         e.stopPropagation();
       });
     }
@@ -5407,6 +5663,12 @@
           highlightSendButton(false);
         }
       });
+      sourcesPathEl.addEventListener('change', () => {
+        const val = sourcesPathEl.value.trim();
+        if (val) {
+          checkAndUpdateInputForPath(val);
+        }
+      });
     }
 
     applyTheme(state.theme);
@@ -5463,8 +5725,12 @@
               }
             }
             state.savedTexts = sortSavedTexts(merged);
+            const missingKeywords =
+              Array.isArray(s.savedTexts) &&
+              s.savedTexts.some((it) => typeof it === 'object' && !('keywords' in it));
             const changed =
               addedDefaults ||
+              missingKeywords ||
               !Array.isArray(s.savedTexts) ||
               s.savedTexts.length !== state.savedTexts.length;
             if (changed) {
@@ -5634,6 +5900,7 @@
     try {
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
+        checkAndUpdateInputFromDroppedFiles(files);
         for (const file of files) {
           processTextForClassInfo(file.name);
         }
@@ -5646,6 +5913,7 @@
     try {
       const files = e.target?.files;
       if (files && files.length > 0) {
+        checkAndUpdateInputFromDroppedFiles(files);
         for (const file of files) {
           processTextForClassInfo(file.name);
         }
@@ -5658,6 +5926,7 @@
     try {
       const files = e.clipboardData?.files;
       if (files && files.length > 0) {
+        checkAndUpdateInputFromDroppedFiles(files);
         for (const file of files) {
           processTextForClassInfo(file.name);
         }
