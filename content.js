@@ -5696,42 +5696,30 @@
           // Mantém texto personalizado; migra só o default antigo.
           if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
           else state.text = DEFAULTS.text;
-          const loadedSaved = Array.isArray(s.savedTexts)
-            ? normalizeSavedTexts(s.savedTexts).filter(
-                (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
-              )
-            : [];
-          if (!loadedSaved.length) {
+          if (!Array.isArray(s.savedTexts)) {
+            // Instalação limpa / primeira inicialização: usa os padrões
             state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
-            if (!Array.isArray(s.savedTexts) || s.savedTexts.length !== state.savedTexts.length) {
-              try {
-                chrome.storage.local.set({
-                  [STORAGE_KEY]: {
-                    ...s,
-                    savedTexts: state.savedTexts,
-                  },
-                });
-              } catch {
-                // ignore
-              }
+            try {
+              chrome.storage.local.set({
+                [STORAGE_KEY]: {
+                  ...s,
+                  savedTexts: state.savedTexts,
+                },
+              });
+            } catch {
+              // ignore
             }
           } else {
-            const merged = [...loadedSaved];
-            let addedDefaults = false;
-            for (const defItem of DEFAULT_SAVED_TEXTS) {
-              if (!merged.some((item) => item.text === defItem.text)) {
-                merged.push({ ...defItem });
-                addedDefaults = true;
-              }
-            }
-            state.savedTexts = sortSavedTexts(merged);
+            // O usuário já possui savedTexts no storage (pode ter excluído, editado ou adicionado).
+            // NUNCA reinserir textos padrão que o usuário apagou.
+            const loadedSaved = normalizeSavedTexts(s.savedTexts).filter(
+              (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
+            );
+            state.savedTexts = sortSavedTexts(loadedSaved);
             const missingKeywords =
-              Array.isArray(s.savedTexts) &&
               s.savedTexts.some((it) => typeof it === 'object' && !('keywords' in it));
             const changed =
-              addedDefaults ||
               missingKeywords ||
-              !Array.isArray(s.savedTexts) ||
               s.savedTexts.length !== state.savedTexts.length;
             if (changed) {
               try {
