@@ -3483,7 +3483,9 @@
           txt.includes('pesquise novas fontes') ||
           txt.includes('enviar arquivos') ||
           txt.includes('fazer upload') ||
-          txt.includes('upload files')
+          txt.includes('upload files') ||
+          txt.includes('selecionar arquivos') ||
+          txt.includes('selecionar arquivo')
         ) {
           return d;
         }
@@ -3496,7 +3498,7 @@
 
   function isNotebookLMModalButtonHighlighted() {
     try {
-      const dialog = getNotebookLMOpenDialog();
+      const dialog = getNotebookLMOpenDialog() || document.querySelector('.cdk-overlay-container');
       if (dialog && dialog.querySelector('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn')) {
         return true;
       }
@@ -3514,12 +3516,15 @@
   async function autoArmAndHighlightModalUpload(targetPath, force = false) {
     if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
     if (isAutoArming) return;
-    // Se o envio automático estiver desabilitado, ou modal foi fechado pelo usuário ou a pasta já foi enviada, não re-abre nem re-arma sozinho
-    if (!force && (!state.autoUploadFiles || lastUploadedPath === targetPath || userDismissedModal)) return;
+    // Se o envio automático estiver desabilitado ou a pasta já foi enviada, não re-arma sozinho
+    if (!force && (!state.autoUploadFiles || lastUploadedPath === targetPath)) return;
 
     // CRUCIAL: Só executa preparação se o modal de fontes do NotebookLM estiver REALMENTE aberto na tela!
     const dialog = getNotebookLMOpenDialog();
     if (!dialog) return;
+
+    // O modal está aberto na tela, portanto não está descartado
+    userDismissedModal = false;
 
     // Evita chamadas repetidas desnecessárias se o botão do modal já estiver destacado
     if (!force && lastAutoArmedPath === targetPath && isNotebookLMModalButtonHighlighted()) return;
@@ -3633,34 +3638,46 @@
       console.warn('[CCA] Leitura do clipboard via API falhou:', e);
     }
 
-    clipText = clipText.trim();
+    clipText = clipText.trim().replace(/^["']|["']$/g, '');
     const inputEl = rootEl?.querySelector('#cca-sources-path');
+    const savedPath = (inputEl?.value.trim() || state.nlmSourcesPath || '').trim();
 
-    if (!clipText && inputEl?.value.trim()) {
-      clipText = inputEl.value.trim();
+    // Se o texto da área de transferência for longo/multilinhas ou vazio, prefere o caminho já salvo
+    if (clipText && (clipText.includes('\n') || clipText.includes('\r') || clipText.length > 500)) {
+      clipText = savedPath;
+    }
+
+    if (!clipText && savedPath) {
+      clipText = savedPath;
     }
 
     if (!clipText) {
-      setStatus('Área de transferência vazia. Copie o caminho da pasta primeiro.');
+      setStatus('Área de transferência vazia e nenhuma pasta preenchida. Copie o caminho da pasta primeiro.');
       return;
     }
 
     if (inputEl) {
       inputEl.value = clipText;
-      state.nlmSourcesPath = clipText;
-      persistUiFields();
     }
+    state.nlmSourcesPath = clipText;
+    persistUiFields();
 
     await executeAddSources(clipText, mode);
   }
 
   async function addSourcesFromPathInput(mode = 'file') {
     const inputEl = rootEl?.querySelector('#cca-sources-path');
-    const path = inputEl?.value.trim();
+    let path = (inputEl?.value.trim() || state.nlmSourcesPath || '').trim();
     if (!path) {
-      setStatus('Digite ou cole o caminho da pasta com as fontes.');
+      try {
+        path = ((await navigator.clipboard.readText()) || '').trim().replace(/^["']|["']$/g, '');
+      } catch (_) {}
+    }
+    if (!path || path.includes('\n') || path.includes('\r') || path.length > 500) {
+      setStatus('Digite ou copie o caminho da pasta com as fontes.');
       return;
     }
+    if (inputEl) inputEl.value = path;
     state.nlmSourcesPath = path;
     persistUiFields();
     await executeAddSources(path, mode);
@@ -3669,7 +3686,7 @@
   async function executeAddSources(targetPath, mode = 'file') {
     userDismissedModal = false;
     lastUploadedPath = '';
-    highlightSendButton(false);
+    highlightSendButton(true, targetPath);
     if (!isNotebookLM()) {
       setStatus('Esta opção só funciona no NotebookLM.');
       return;
@@ -3701,13 +3718,13 @@
         return;
       }
 
-      setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${res.folderName}". Enviando ${actionDesc} para o NotebookLM…`);
+      setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${res.folderName}". Abrindo modal e preparando envio ${actionDesc}…`);
 
       try {
         const result = await uploadFilesToNotebookLM(files, mode);
         if (result.waitingManualClick) {
           setStatus(
-            `👉 <strong>Pronto para injetar!</strong> Dê <strong>1 clique no botão destacado em verde</strong> ("Fazer upload / Enviar arquivos") no centro da tela.<br>` +
+            `👉 <strong>Pronto para injetar!</strong> Dê <strong>1 clique no botão destacado em verde</strong> ("Selecionar arquivos / Enviar arquivos") no centro da tela.<br>` +
             `Os <strong>${result.count}</strong> arquivo(s) serão adicionados diretamente no NotebookLM sem abrir pastas do SO!`
           );
           return;
@@ -3738,8 +3755,17 @@
 
     if (ev.data?.type === 'CCA_NLM_MODAL_CLOSED_BY_USER') {
       userDismissedModal = true;
-      highlightSendButton(false);
-      setStatus('Modal de fontes fechado. Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.');
+      if (state.nlmSourcesPath) {
+        highlightSendButton(true, state.nlmSourcesPath);
+        setStatus(
+          `Modal de fontes fechado.<br>` +
+          `Pasta detectada: <strong style="word-break: break-all; color: #58a6ff;">${state.nlmSourcesPath}</strong><br>` +
+          `Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.`
+        );
+      } else {
+        highlightSendButton(false);
+        setStatus('Modal de fontes fechado. Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.');
+      }
     }
   });
 
@@ -3864,7 +3890,14 @@
         const t = (b.textContent || '').trim().toLowerCase();
         const a = (b.getAttribute('aria-label') || '').trim().toLowerCase();
         if (t.includes('sites') || t.includes('drive') || t.includes('livros') || t.includes('copiado')) return false;
-        return t.includes('enviar') || t.includes('upload') || a.includes('enviar') || a.includes('upload');
+        return (
+          t.includes('enviar') ||
+          t.includes('upload') ||
+          t.includes('selecionar') ||
+          a.includes('enviar') ||
+          a.includes('upload') ||
+          a.includes('selecionar')
+        );
       });
 
       if (uploadBtn) {

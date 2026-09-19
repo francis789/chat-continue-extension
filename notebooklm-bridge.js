@@ -279,7 +279,9 @@
           txt.includes('pesquise novas fontes') ||
           txt.includes('enviar arquivos') ||
           txt.includes('fazer upload') ||
-          txt.includes('upload files')
+          txt.includes('upload files') ||
+          txt.includes('selecionar arquivos') ||
+          txt.includes('selecionar arquivo')
         );
       }) || null
     );
@@ -287,25 +289,60 @@
 
   function findAddSourceButton() {
     const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, div[tabindex="0"]'));
+    const found = buttons.find((b) => {
+      if (b.closest('#cca-root') || b.id?.startsWith('cca-')) return false;
+      if (b.offsetParent === null && b.offsetWidth === 0 && b.offsetHeight === 0) return false;
+      const t = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const a = (b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const title = (b.getAttribute('title') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const combined = `${t} ${a} ${title}`.trim();
+      return (
+        combined.includes('adicionar fonte') ||
+        combined.includes('adicionar fontes') ||
+        combined.includes('add source') ||
+        combined.includes('add sources') ||
+        combined.includes('nova fonte') ||
+        combined.includes('new source') ||
+        combined.includes('adicionar arquivo') ||
+        combined.includes('adicionar arquivos') ||
+        combined.includes('inserir fonte') ||
+        combined.includes('inserir fontes') ||
+        (combined.includes('fonte') && combined.includes('+')) ||
+        (combined.includes('source') && combined.includes('+'))
+      );
+    });
+    if (found) return found;
+
     return (
-      buttons.find((b) => {
-        if (b.closest('#cca-root') || b.id?.startsWith('cca-')) return false;
-        if (b.offsetParent === null && b.offsetWidth === 0 && b.offsetHeight === 0) return false;
-        const t = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const a = (b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const title = (b.getAttribute('title') || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const combined = `${t} ${a} ${title}`.trim();
-        return (
-          combined.includes('adicionar fonte') ||
-          combined.includes('adicionar fontes') ||
-          combined.includes('add source') ||
-          combined.includes('add sources') ||
-          combined.includes('nova fonte') ||
-          combined.includes('new source')
-        );
-      }) ||
-      document.querySelector('button[aria-label*="fonte" i], button[aria-label*="source" i]')
+      document.querySelector(
+        'button[aria-label*="fonte" i], button[aria-label*="source" i], [data-test-id*="add-source" i], [aria-label*="adicionar fonte" i]'
+      ) || null
     );
+  }
+
+  async function ensureOpenSourcesDialog(maxWaitMs = 3500) {
+    let dialog = getOpenDialog();
+    if (dialog) return dialog;
+
+    const addBtn = findAddSourceButton();
+    if (!addBtn) {
+      console.warn('[CCA-Bridge] Botão para adicionar fontes não encontrado no DOM.');
+      return null;
+    }
+
+    console.log('[CCA-Bridge] Modal não está aberto. Clicando em "Adicionar fontes" para abrir...');
+    triggerClick(addBtn);
+
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      await sleep(100);
+      dialog = getOpenDialog();
+      if (dialog) {
+        console.log('[CCA-Bridge] Modal de fontes aberto com sucesso.');
+        return dialog;
+      }
+    }
+    return getOpenDialog();
   }
 
   function findUploadButton(dialog) {
@@ -314,7 +351,16 @@
       const excludeTerms = ['drive', 'google drive', 'sites', 'website', 'livros', 'copiado', 'copied', 'pesquisa no google', 'youtube'];
       const isExcluded = (str) => excludeTerms.some((term) => str.includes(term));
 
-      // 1. Busca em botões e elementos interativos
+      // 1. Prioriza input[type="file"] e seu elemento clicável associado
+      const fileInput = root.querySelector('input[type="file"]');
+      if (fileInput) {
+        const parentBtn = fileInput.closest('button, [role="button"], label, .mdc-button, mat-card');
+        if (parentBtn && !parentBtn.closest('#cca-root') && parentBtn.offsetParent !== null) {
+          return parentBtn;
+        }
+      }
+
+      // 2. Busca em botões e elementos interativos
       const candidates = Array.from(
         root.querySelectorAll('button, [role="button"], a.mat-button, label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button')
       );
@@ -338,13 +384,22 @@
           combined.includes('upload de arquivos') ||
           combined.includes('subir archivo') ||
           combined.includes('subir arquivos') ||
+          combined.includes('selecionar arquivo') ||
+          combined.includes('selecionar arquivos') ||
+          combined.includes('selecionar do computador') ||
+          combined.includes('escolher arquivo') ||
+          combined.includes('escolher arquivos') ||
+          combined.includes('select file') ||
+          combined.includes('select files') ||
+          combined.includes('choose file') ||
+          combined.includes('choose files') ||
           (combined.includes('upload') && !combined.includes('drive'))
         ) {
           return el;
         }
       }
 
-      // 2. Busca por texto interno em spans, divs, rótulos ou ícones
+      // 3. Busca por texto interno em spans, divs, rótulos ou ícones
       const labels = Array.from(
         root.querySelectorAll('.mdc-button__label, span, div, p, label, mat-icon, [class*="label"], [class*="title"]')
       );
@@ -366,11 +421,25 @@
           t === 'upload' ||
           t === 'subir arquivos' ||
           t === 'subir archivo' ||
+          t === 'selecionar arquivos' ||
+          t === 'selecionar arquivo' ||
+          t === 'escolher arquivos' ||
+          t === 'escolher arquivo' ||
+          t === 'select files' ||
+          t === 'select file' ||
+          t === 'choose files' ||
+          t === 'choose file' ||
           t.includes('fazer upload') ||
           t.includes('enviar arquivo') ||
           t.includes('upload file') ||
           t.includes('upload de arquivo') ||
-          t.includes('subir archivo')
+          t.includes('subir archivo') ||
+          t.includes('selecionar arquivo') ||
+          t.includes('selecionar arquivos') ||
+          t.includes('escolher arquivo') ||
+          t.includes('escolher arquivos') ||
+          t.includes('select file') ||
+          t.includes('choose file')
         ) {
           const clickable =
             s.closest('button, [role="button"], label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button') ||
@@ -386,6 +455,11 @@
 
     if (dialog) {
       const found = searchContainer(dialog);
+      if (found) return found;
+    }
+    const overlayContainer = document.querySelector('.cdk-overlay-container');
+    if (overlayContainer) {
+      const found = searchContainer(overlayContainer);
       if (found) return found;
     }
     return searchContainer(document);
@@ -543,7 +617,7 @@
     if (!__armedFiles || __armedFiles.length === 0) return false;
     const dialog = getOpenDialog();
     if (!dialog) return false;
-    let uploadBtn = findUploadButton(dialog);
+    let uploadBtn = findUploadButton(dialog) || findUploadButton(document.querySelector('.cdk-overlay-container'));
     if (!uploadBtn) return false;
 
     if (uploadBtn.tagName.toLowerCase() !== 'button' && uploadBtn.tagName.toLowerCase() !== 'label') {
@@ -652,18 +726,22 @@
 
   function startHighlightWatcher() {
     stopHighlightWatcher();
+    let dialogSeen = Boolean(getOpenDialog());
     ensureModalButtonHighlighted();
 
-    // 1. Intervalo de monitoramento rápido para capturar renderização do Angular sem forçar abertura de modal
+    // 1. Intervalo de monitoramento para capturar renderização do Angular sem forçar abertura de modal
     let elapsed = 0;
     __highlightWatcherTimer = setInterval(() => {
       elapsed += 250;
-      if (!__armedFiles || elapsed > 30000) {
+      if (!__armedFiles || elapsed > 60000) {
         stopHighlightWatcher();
         return;
       }
       const dialog = getOpenDialog();
-      if (!dialog) {
+      if (dialog) {
+        dialogSeen = true;
+        ensureModalButtonHighlighted();
+      } else if (dialogSeen) {
         console.log('[CCA-Bridge] Modal fechado detectado pelo watcher.');
         __armedFiles = null;
         stopHighlightWatcher();
@@ -671,7 +749,6 @@
         window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
         return;
       }
-      ensureModalButtonHighlighted();
     }, 250);
 
     // 2. MutationObserver para reagir instantaneamente quando o modal for inserido ou removido do DOM
@@ -680,8 +757,9 @@
         if (__armedFiles && __armedFiles.length > 0) {
           const dialog = getOpenDialog();
           if (dialog) {
+            dialogSeen = true;
             ensureModalButtonHighlighted();
-          } else {
+          } else if (dialogSeen) {
             console.log('[CCA-Bridge] Modal fechado detectado pelo MutationObserver.');
             __armedFiles = null;
             stopHighlightWatcher();
@@ -734,10 +812,16 @@
       webFiles.map((f) => f.name)
     );
 
-    // 1. Arma o interceptador global no MAIN world
+    // 1. Se o modal não estiver aberto, abre o modal de fontes do NotebookLM
+    let dialog = getOpenDialog();
+    if (!dialog) {
+      dialog = await ensureOpenSourcesDialog();
+    }
+
+    // 2. Arma o interceptador global no MAIN world
     armInterceptor(webFiles);
 
-    // 2. Inicia o watcher contínuo que busca o botão e o destaca no modal do NotebookLM
+    // 3. Inicia o watcher contínuo que busca o botão e o destaca no modal do NotebookLM
     startHighlightWatcher();
 
     return {
@@ -763,15 +847,7 @@
       const rf = rawFiles[i];
       let curDialog = getOpenDialog();
       if (!curDialog) {
-        const addBtn = findAddSourceButton();
-        if (addBtn) {
-          triggerClick(addBtn);
-          for (let w = 0; w < 10; w++) {
-            await sleep(100);
-            curDialog = getOpenDialog();
-            if (curDialog) break;
-          }
-        }
+        curDialog = await ensureOpenSourcesDialog();
       }
       if (!curDialog) break;
 
