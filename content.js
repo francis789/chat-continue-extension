@@ -4152,7 +4152,7 @@
           </div>
         </div>
         <div id="cca-config-section" data-open="0">
-          <button type="button" id="cca-config-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-config-body" title="Mostrar ou ocultar configurações de strings e limites">
+          <button type="button" id="cca-config-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-config-body" title="Mostrar ou ocultar configurações">
             <span class="cca-collapse-chevron" aria-hidden="true">▸</span>
             <span>Configuração</span>
           </button>
@@ -4165,22 +4165,22 @@
               <label title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">Máx. total das strings na página (0 = sem limite) <span class="cca-info" title="Limite máximo de ocorrências na página para cada string (0 = sem limite). Ao atingir o limite de qualquer uma delas, a execução é interrompida.">ⓘ</span></label>
               <div id="cca-marker-max-list" class="cca-marker-max-list"></div>
             </div>
+            <div id="cca-row">
+              <div>
+                <label for="cca-times" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">Quantas vezes <span class="cca-info" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">ⓘ</span></label>
+                <input id="cca-times" type="number" min="1" max="9999" step="1" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100)." />
+              </div>
+              <div>
+                <label for="cca-min" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta.">Mín. ocorrências aceitas <span class="cca-info" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta.">ⓘ</span></label>
+                <input id="cca-min" type="number" min="1" max="999" step="1" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta." />
+              </div>
+            </div>
+            <label for="cca-stop-text" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">Texto de parada (verificado após a resposta terminar) <span class="cca-info" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">ⓘ</span></label>
+            <input id="cca-stop-text" type="text" spellcheck="false"
+              placeholder="ex.: COMANDO FINALIZADO"
+              title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios." />
           </div>
         </div>
-        <div id="cca-row">
-          <div>
-            <label for="cca-times" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">Quantas vezes <span class="cca-info" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100).">ⓘ</span></label>
-            <input id="cca-times" type="number" min="1" max="9999" step="1" title="Quantidade total de vezes que a mensagem será inserida e enviada no chat (padrão: 100)." />
-          </div>
-          <div>
-            <label for="cca-min" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta.">Mín. ocorrências aceitas <span class="cca-info" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta.">ⓘ</span></label>
-            <input id="cca-min" type="number" min="1" max="999" step="1" title="Quantidade mínima de ocorrências de pelo menos uma das strings aceitas na última resposta." />
-          </div>
-        </div>
-        <label for="cca-stop-text" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">Texto de parada (verificado após a resposta terminar) <span class="cca-info" title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios.">ⓘ</span></label>
-        <input id="cca-stop-text" type="text" spellcheck="false"
-          placeholder="ex.: COMANDO FINALIZADO"
-          title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios." />
         <div id="cca-nlm-section" style="display:none" data-open="0">
           <hr class="cca-sep" />
           <button type="button" id="cca-nlm-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-nlm-body" title="Mostrar ou ocultar opções de limpeza do NotebookLM">
