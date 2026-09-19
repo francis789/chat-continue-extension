@@ -750,7 +750,276 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse?.({ ok: true });
     return true;
   }
+
+  // === File System Handle / Picker para Fontes do NotebookLM ===
+  if (msg?.type === 'cca-open-picker') {
+    chrome.windows.create({
+      url: 'picker.html',
+      type: 'popup',
+      width: 460,
+      height: 480
+    });
+    sendResponse?.({ ok: true });
+    return true;
+  }
+
+  if (msg?.type === 'cca-picker-done') {
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, { type: 'cca-folder-connected', name: msg.name }).catch(() => {});
+      }
+    });
+    sendResponse?.({ ok: true });
+    return true;
+  }
+
+  if (msg?.type === 'cca-get-connected-folder') {
+    (async () => {
+      try {
+        const handle = await _ccaGetHandle('root');
+        let name = handle?.name || null;
+        if (!name) {
+          const local = await chrome.storage.local.get('ccaRootFolderName');
+          name = local?.ccaRootFolderName || null;
+        }
+        sendResponse?.({ ok: true, name });
+      } catch (e) {
+        sendResponse?.({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg?.type === 'cca-read-folder-files') {
+    (async () => {
+      try {
+        const res = await _ccaGetFolderFiles(msg.path);
+        sendResponse?.(res);
+      } catch (e) {
+        sendResponse?.({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
 });
+
+// === File System Access API Helpers para o Service Worker ===
+const _CCA_DB_NAME = 'ChatContinueDB';
+const _CCA_DB_VERSION = 1;
+const _CCA_STORE = 'handles';
+
+async function _ccaGetHandle(id = 'root') {
+  try {
+    const idb = await new Promise((resolve, reject) => {
+      const req = indexedDB.open(_CCA_DB_NAME, _CCA_DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(_CCA_STORE)) {
+          db.createObjectStore(_CCA_STORE, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror = (e) => reject(e.target.error);
+    });
+    const tx = idb.transaction(_CCA_STORE, 'readonly');
+    const req = tx.objectStore(_CCA_STORE).get(id);
+    return new Promise((r) => { req.onsuccess = () => r(req.result?.handle || null); });
+  } catch (err) {
+    console.warn('[CCA] _ccaGetHandle erro:', err);
+    return null;
+  }
+}
+
+async function _getDirCaseInsensitive(parentHandle, targetName) {
+  if (!parentHandle || !targetName) return null;
+  try {
+    return await parentHandle.getDirectoryHandle(targetName);
+  } catch (_) {}
+
+  const targetLower = targetName.toLowerCase();
+  try {
+    for await (const [name, handle] of parentHandle.entries()) {
+      if (handle.kind === 'directory' && name.toLowerCase() === targetLower) {
+        return handle;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _searchDirRecursive(parentHandle, targetName, maxDepth = 4) {
+  if (!parentHandle || maxDepth < 0) return null;
+  const targetLower = targetName.toLowerCase();
+  if (parentHandle.name.toLowerCase() === targetLower) return parentHandle;
+
+  // 1. Checa filhos diretos
+  const direct = await _getDirCaseInsensitive(parentHandle, targetName);
+  if (direct) return direct;
+
+  // 2. Busca recursiva
+  try {
+    for await (const [name, handle] of parentHandle.entries()) {
+      if (handle.kind === 'directory') {
+        const found = await _searchDirRecursive(handle, targetName, maxDepth - 1);
+        if (found) return found;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _ccaNavigateToFolder(rootHandle, targetPath) {
+  if (!rootHandle) throw new Error('Nenhuma pasta raiz conectada. Conecte a pasta raiz primeiro.');
+
+  let clean = (targetPath || '').trim().replace(/\\/g, '/');
+  clean = clean.replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+
+  // Se o caminho aponta para um arquivo (ex.: .md, .txt), remove o nome do arquivo
+  if (/\.[a-zA-Z0-9]{1,5}$/.test(clean)) {
+    const lastSlash = clean.lastIndexOf('/');
+    if (lastSlash > 0) clean = clean.slice(0, lastSlash);
+  }
+
+  const cleanLower = clean.toLowerCase();
+  const rootLower = rootHandle.name.toLowerCase();
+  const rootIdx = cleanLower.indexOf(rootLower);
+
+  let parts = [];
+  if (rootIdx >= 0) {
+    const sub = clean.slice(rootIdx + rootHandle.name.length);
+    parts = sub.split('/').filter(Boolean);
+  } else {
+    const dadosIdx = cleanLower.indexOf('_dados');
+    if (dadosIdx >= 0) {
+      if (rootLower === '_dados') {
+        parts = clean.slice(dadosIdx + '_dados'.length).split('/').filter(Boolean);
+      } else {
+        parts = clean.slice(dadosIdx).split('/').filter(Boolean);
+      }
+    } else {
+      const mapasIdx = cleanLower.indexOf('mapas');
+      if (mapasIdx >= 0) {
+        parts = clean.slice(mapasIdx).split('/').filter(Boolean);
+      } else {
+        parts = clean.split('/').filter(Boolean);
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    return rootHandle;
+  }
+
+  // Tenta navegação sequencial
+  let current = rootHandle;
+  let allFound = true;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    let next = await _getDirCaseInsensitive(current, part);
+    if (!next && i === 0) {
+      const dadosSub = await _getDirCaseInsensitive(current, '_Dados');
+      if (dadosSub) {
+        next = await _getDirCaseInsensitive(dadosSub, part);
+        if (next) current = dadosSub;
+        else {
+          const mapasSub = await _getDirCaseInsensitive(dadosSub, 'mapas');
+          if (mapasSub) {
+            next = await _getDirCaseInsensitive(mapasSub, part);
+            if (next) current = mapasSub;
+          }
+        }
+      }
+    }
+    if (next) {
+      current = next;
+    } else {
+      allFound = false;
+      break;
+    }
+  }
+
+  if (allFound) {
+    return current;
+  }
+
+  // Fallback: Busca recursiva pelo nome da pasta alvo
+  const targetFolderName = parts[parts.length - 1];
+  const found = await _searchDirRecursive(rootHandle, targetFolderName, 4);
+  if (found) {
+    return found;
+  }
+
+  throw new Error(`Subpasta "${targetFolderName}" não foi encontrada dentro de "${rootHandle.name}".`);
+}
+
+function _ccaArrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+  }
+  return btoa(binary);
+}
+
+async function _ccaGetFolderFiles(targetPath) {
+  const rootHandle = await _ccaGetHandle('root');
+  if (!rootHandle) {
+    return {
+      ok: false,
+      error: 'no_handle',
+      message: 'Nenhuma pasta raiz conectada. Clique em "Conectar pasta raiz" primeiro.'
+    };
+  }
+
+  const folderHandle = await _ccaNavigateToFolder(rootHandle, targetPath);
+  const files = [];
+
+  for await (const [name, handle] of folderHandle.entries()) {
+    if (handle.kind === 'file') {
+      try {
+        const file = await handle.getFile();
+        let text = null;
+        let base64 = null;
+        const isText = (
+          file.name.endsWith('.md') ||
+          file.name.endsWith('.txt') ||
+          file.name.endsWith('.json') ||
+          file.name.endsWith('.csv') ||
+          file.name.endsWith('.xml') ||
+          file.name.endsWith('.html') ||
+          file.type.startsWith('text/')
+        );
+
+        if (isText) {
+          try {
+            text = await file.text();
+          } catch (_) {}
+        }
+
+        if (text === null) {
+          try {
+            const buffer = await file.arrayBuffer();
+            base64 = _ccaArrayBufferToBase64(buffer);
+          } catch (_) {}
+        }
+
+        files.push({
+          name: file.name,
+          size: file.size,
+          lastModified: file.lastModified,
+          type: file.type || (file.name.endsWith('.md') ? 'text/markdown' : 'text/plain'),
+          text: text,
+          base64: base64
+        });
+      } catch (fErr) {
+        console.warn('[CCA] Erro ao ler arquivo do handle:', name, fErr);
+      }
+    }
+  }
+
+  return { ok: true, folderName: folderHandle.name, filesCount: files.length, files };
+}
 
 // Ao ativar uma aba com notificação pendente, limpa o badge
 chrome.tabs.onActivated.addListener((activeInfo) => {

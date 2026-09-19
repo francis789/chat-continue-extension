@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Chat Continue Auto",
-  "version": "1.0.41",
+  "version": "1.0.44",
   "description": "Quando a IA para de gerar, insere um texto no input e envia — N vezes.",
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "scripting", "activeTab", "notifications", "clipboardWrite"],
+  "permissions": ["storage", "scripting", "activeTab", "notifications", "clipboardWrite", "clipboardRead"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://*.chatgpt.com/*",
@@ -51,11 +51,21 @@
       "css": ["content.css"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://notebooklm.google.com/*",
+        "https://notebook.google.com/*",
+        "https://*.notebook.google.com/*"
+      ],
+      "js": ["notebooklm-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["content.css"],
+      "resources": ["content.css", "picker.html", "picker.js", "notebooklm-bridge.js"],
       "matches": ["<all_urls>"]
     }
   ]

@@ -51,10 +51,20 @@
     protectTitles: '',
     /** Seção NotebookLM — limpeza expandida no painel. */
     nlmSectionOpen: false,
+    /** Seção NotebookLM — fontes expandida no painel. */
+    nlmSourcesSectionOpen: true,
+    /** Último caminho de pasta de fontes utilizado. */
+    nlmSourcesPath: '',
     /** Seção de configuração (strings aceitas e limites) expandida no painel. */
     configSectionOpen: false,
     /** Exibir ou ocultar o ícone da extensão no site. */
     visible: true,
+    /** Tema visual: 'dark' ou 'light'. */
+    theme: 'dark',
+    /** Inversão de cores da página (modo escuro/alto contraste). */
+    invertPage: false,
+    /** Inversão de cores do painel da extensão. */
+    invertPanel: false,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXTS = new Set([
@@ -177,6 +187,14 @@
     deletingNotebooks: false,
     /** Exibir ou ocultar o ícone da extensão no site. */
     visible: DEFAULTS.visible,
+    /** Tema visual da interface ('dark' | 'light'). */
+    theme: DEFAULTS.theme,
+    /** Inversão de cores da página ativa. */
+    invertPage: DEFAULTS.invertPage,
+    /** Inversão de cores do painel ativa. */
+    invertPanel: DEFAULTS.invertPanel,
+    /** Menu de configurações (tema e ajuda) aberto. */
+    settingsMenuOpen: false,
   };
 
   let rootEl = null;
@@ -3367,6 +3385,325 @@
     }
   }
 
+  // ─── NotebookLM: adição de fontes locais ──────────────────────────
+
+  function isNotebookLMNotebookPage() {
+    return isNotebookLM() && /\/notebook\/[a-zA-Z0-9_-]+/i.test(window.location.pathname);
+  }
+
+  function openRootFolderPicker() {
+    chrome.runtime.sendMessage({ type: 'cca-open-picker' });
+  }
+
+  function updateConnectedFolderStatus() {
+    try {
+      chrome.runtime.sendMessage({ type: 'cca-get-connected-folder' }, (res) => {
+        const nameEl = rootEl?.querySelector('#cca-folder-name');
+        if (!nameEl) return;
+        if (res?.ok && res.name) {
+          nameEl.textContent = res.name;
+          nameEl.style.color = '#7ee787';
+        } else {
+          nameEl.textContent = 'Não conectada';
+          nameEl.style.color = '#f85149';
+        }
+      });
+    } catch {
+      // background não respondeu
+    }
+  }
+
+  async function pasteAndAddSourcesToNotebookLM(mode = 'file') {
+    let clipText = '';
+    try {
+      clipText = (await navigator.clipboard.readText()) || '';
+    } catch (e) {
+      console.warn('[CCA] Leitura do clipboard via API falhou:', e);
+    }
+
+    clipText = clipText.trim();
+    const inputEl = rootEl?.querySelector('#cca-sources-path');
+
+    if (!clipText && inputEl?.value.trim()) {
+      clipText = inputEl.value.trim();
+    }
+
+    if (!clipText) {
+      setStatus('Área de transferência vazia. Copie o caminho da pasta primeiro.');
+      return;
+    }
+
+    if (inputEl) {
+      inputEl.value = clipText;
+      state.nlmSourcesPath = clipText;
+      persistUiFields();
+    }
+
+    await executeAddSources(clipText, mode);
+  }
+
+  async function addSourcesFromPathInput(mode = 'file') {
+    const inputEl = rootEl?.querySelector('#cca-sources-path');
+    const path = inputEl?.value.trim();
+    if (!path) {
+      setStatus('Digite ou cole o caminho da pasta com as fontes.');
+      return;
+    }
+    state.nlmSourcesPath = path;
+    persistUiFields();
+    await executeAddSources(path, mode);
+  }
+
+  async function executeAddSources(targetPath, mode = 'file') {
+    if (!isNotebookLM()) {
+      setStatus('Esta opção só funciona no NotebookLM.');
+      return;
+    }
+    if (!isNotebookLMNotebookPage()) {
+      setStatus('Abra ou crie um caderno do NotebookLM antes de adicionar fontes.');
+      return;
+    }
+
+    const actionDesc = mode === 'text' ? 'como texto copiado' : 'como arquivos';
+    console.log(`[CCA] Adicionar fontes (${actionDesc}) — caminho solicitado:`, targetPath);
+    setStatus(`Lendo arquivos da pasta no disco…`);
+
+    chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: targetPath }, async (res) => {
+      console.log('[CCA] Resposta recebida do background:', res);
+      if (!res?.ok) {
+        const errMsg = res?.message || res?.error || 'Erro ao ler pasta';
+        console.warn('[CCA] Falha na leitura da pasta:', errMsg);
+        setStatus(`Falha: ${errMsg}`);
+        if (res?.error === 'no_handle') {
+          openRootFolderPicker();
+        }
+        return;
+      }
+
+      const files = res.files;
+      if (!files || !files.length) {
+        setStatus(`Nenhum arquivo encontrado em "${res.folderName}".`);
+        return;
+      }
+
+      setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${res.folderName}". Enviando ${actionDesc} para o NotebookLM…`);
+
+      try {
+        const result = await uploadFilesToNotebookLM(files, mode);
+        if (result.waitingManualClick) {
+          setStatus(
+            `👉 <strong>Pronto para injetar!</strong> Dê <strong>1 clique no botão destacado em verde</strong> ("Fazer upload / Enviar arquivos") no centro da tela.<br>` +
+            `Os <strong>${result.count}</strong> arquivo(s) serão adicionados diretamente no NotebookLM sem abrir pastas do SO!`
+          );
+          return;
+        }
+
+        const namesPreview = (result.fileNames || []).slice(0, 3).join(', ') + ((result.fileNames?.length || 0) > 3 ? '…' : '');
+        let methodDesc = ' (upload de arquivos)';
+        if (result.method === 'copied_text') methodDesc = ' (texto copiado)';
+        else if (result.method === 'drag_and_drop') methodDesc = ' (arrastar e soltar)';
+        else if (result.method === 'file_picker_api') methodDesc = ' (File Picker API)';
+        setStatus(`✓ <strong>${result.count}</strong> fonte(s) enviada(s) ao NotebookLM${methodDesc} [${namesPreview}]!`);
+      } catch (err) {
+        console.error('[CCA] uploadFilesToNotebookLM erro:', err);
+        setStatus(`Falha ao adicionar fontes: ${err.message || String(err)}`);
+      }
+    });
+  }
+
+  // Listener para confirmação de upload pelo interceptador armado do Main World
+  window.addEventListener('message', (ev) => {
+    if (ev.data?.type === 'CCA_NLM_UPLOAD_CONFIRMED') {
+      const names = (ev.data.fileNames || []).slice(0, 3).join(', ') + ((ev.data.fileNames?.length || 0) > 3 ? '…' : '');
+      setStatus(`✓ <strong>${ev.data.count}</strong> fonte(s) enviada(s) ao NotebookLM (upload de arquivos) [${names}]!`);
+    }
+  });
+
+  function callMainWorldBridge(action, payload, timeoutMs = 25000) {
+    return new Promise((resolve) => {
+      const reqId = 'cca_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onMsg);
+        resolve({ ok: false, error: 'timeout', message: 'Bridge no MAIN world não respondeu a tempo.' });
+      }, timeoutMs);
+
+      function onMsg(ev) {
+        if (ev.data?.type === 'CCA_NLM_BRIDGE_RES' && ev.data?.reqId === reqId) {
+          clearTimeout(timer);
+          window.removeEventListener('message', onMsg);
+          resolve(ev.data);
+        }
+      }
+
+      window.addEventListener('message', onMsg);
+      window.postMessage({ type: 'CCA_NLM_BRIDGE_REQ', reqId, action, payload }, '*');
+    });
+  }
+
+  async function ensureMainWorldBridge() {
+    const ping = await callMainWorldBridge('ping', {}, 200);
+    if (ping?.ok && ping?.pong) return true;
+
+    if (!document.getElementById('cca-nlm-bridge-script')) {
+      try {
+        const s = document.createElement('script');
+        s.id = 'cca-nlm-bridge-script';
+        s.src = chrome.runtime.getURL('notebooklm-bridge.js');
+        (document.head || document.documentElement).appendChild(s);
+        await new Promise((r) => setTimeout(r, 200));
+        const retry = await callMainWorldBridge('ping', {}, 300);
+        if (retry?.ok && retry?.pong) return true;
+      } catch (e) {
+        console.warn('[CCA] Injeção dinâmica de notebooklm-bridge.js via script tag falhou:', e);
+      }
+    }
+    return false;
+  }
+
+  async function uploadFilesToNotebookLM(filesData, mode = 'file') {
+    console.log(`[CCA] Iniciando uploadFilesToNotebookLM (${mode}) com`, filesData.length, 'arquivos...');
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const bridgeAction = mode === 'text' ? 'upload_text_sources' : 'upload_files';
+
+    // 1. Tenta executar via Main World Bridge (mais poderoso, contorna restrições de sandbox)
+    const bridgeReady = await ensureMainWorldBridge();
+    if (bridgeReady) {
+      console.log('[CCA] Main World Bridge pronto. Enviando requisição:', bridgeAction);
+      setStatus(`Enviando ${filesData.length} fontes pelo Main World Bridge…`);
+      const bridgeRes = await callMainWorldBridge(bridgeAction, { files: filesData });
+      console.log('[CCA] Resposta do Main World Bridge:', bridgeRes);
+      if (bridgeRes?.ok) {
+        return {
+          success: true,
+          count: bridgeRes.count || filesData.length,
+          method: bridgeRes.method || (mode === 'text' ? 'copied_text' : 'file_input'),
+          fileNames: bridgeRes.fileNames || filesData.map((f) => f.name),
+          waitingManualClick: Boolean(bridgeRes.waitingManualClick)
+        };
+      }
+      if (bridgeRes?.error && !bridgeRes.error.includes('timeout')) {
+        throw new Error(bridgeRes.error);
+      }
+    }
+
+    // 2. Fallback de injeção direta pelo Content Script no Isolated World
+    console.log('[CCA] Bridge indisponível ou em timeout. Executando fallback do Content Script...');
+    const webFiles = filesData.map((f) => {
+      let buf = f.buffer;
+      if (Array.isArray(buf) || (buf && !(buf instanceof ArrayBuffer))) {
+        buf = new Uint8Array(buf).buffer;
+      }
+      const mime = f.type || (f.name.endsWith('.md') ? 'text/markdown' : 'text/plain');
+      return new File([buf], f.name, {
+        type: mime,
+        lastModified: f.lastModified || Date.now()
+      });
+    });
+
+    // Localiza ou abre o modal
+    let dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+    if (!dialog) {
+      const addBtn = Array.from(document.querySelectorAll('button, [role="button"], a')).find((b) => {
+        if (b.offsetParent === null && b.offsetWidth === 0) return false;
+        const text = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
+        return (
+          text.includes('adicionar fonte') ||
+          text.includes('adicionar fontes') ||
+          text.includes('add source') ||
+          text.includes('add sources') ||
+          text.includes('nova fonte') ||
+          text.includes('new source')
+        );
+      }) || document.querySelector('button[aria-label*="fonte" i], button[aria-label*="source" i]');
+
+      if (addBtn) {
+        addBtn.click();
+        for (let i = 0; i < 12; i++) {
+          await sleep(100);
+          dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+          if (dialog) break;
+        }
+      }
+    }
+
+    if (!dialog) {
+      throw new Error('Não foi possível encontrar ou abrir o modal de fontes do NotebookLM.');
+    }
+
+    // Procura input[type="file"]
+    let fileInput = dialog.querySelector('input[type="file"]') || document.querySelector('input[type="file"]');
+
+    if (!fileInput) {
+      // Clica especificamente no botão "Enviar arquivos" (e NÃO em divs de texto)
+      const uploadBtn = Array.from(dialog.querySelectorAll('button, [role="button"], a.mat-button')).find((b) => {
+        if (b.offsetParent === null && b.offsetWidth === 0) return false;
+        const t = (b.textContent || '').trim().toLowerCase();
+        const a = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+        if (t.includes('sites') || t.includes('drive') || t.includes('livros') || t.includes('copiado')) return false;
+        return t.includes('enviar') || t.includes('upload') || a.includes('enviar') || a.includes('upload');
+      });
+
+      if (uploadBtn) {
+        uploadBtn.click();
+        await sleep(300);
+        fileInput = dialog.querySelector('input[type="file"]') || document.querySelector('input[type="file"]');
+      }
+    }
+
+    // Se encontrou input, injeta
+    if (fileInput) {
+      const dt = new DataTransfer();
+      for (const wf of webFiles) dt.items.add(wf);
+      fileInput.files = dt.files;
+      fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      await sleep(1000);
+      return { success: true, count: webFiles.length, method: 'file_input', fileNames: webFiles.map((f) => f.name) };
+    }
+
+    // Fallback: Drag & drop na dropzone tracejada
+    const candidates = Array.from(dialog.querySelectorAll('*')).filter((el) => {
+      const t = (el.textContent || '').toLowerCase();
+      return t.includes('solte seus arquivos') || t.includes('drop your files');
+    });
+
+    let dropZone = null;
+    for (const c of candidates) {
+      let cur = c;
+      while (cur && cur !== dialog && cur !== document.body) {
+        const border = (window.getComputedStyle(cur).borderStyle || '').toLowerCase();
+        const cls = (cur.className || '').toString().toLowerCase();
+        if (border.includes('dashed') || border.includes('dotted') || cls.includes('dashed') || cls.includes('drop')) {
+          dropZone = cur;
+          break;
+        }
+        cur = cur.parentElement;
+      }
+      if (dropZone) break;
+    }
+    dropZone = dropZone || candidates[0]?.parentElement || dialog;
+
+    const dt = new DataTransfer();
+    for (const wf of webFiles) dt.items.add(wf);
+
+    dropZone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+    dropZone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+    dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+
+    await sleep(1000);
+
+    // Verifica se o diálogo fechou ou iniciou upload
+    const stillOpen = dialog.isConnected && dialog.offsetParent !== null;
+    const txt = (dialog.textContent || '').toLowerCase();
+    const isUploading = txt.includes('upload') || txt.includes('enviando') || txt.includes('processando');
+
+    if (!stillOpen || isUploading) {
+      return { success: true, count: webFiles.length, method: 'drag_and_drop', fileNames: webFiles.map((f) => f.name) };
+    }
+
+    throw new Error('O modal do NotebookLM não iniciou o upload automaticamente. Recarregue a extensão em chrome://extensions e dê F5 na página.');
+  }
+
   // ─── UI ──────────────────────────────────────────────────────────
 
   function setStatus(html) {
@@ -3503,12 +3840,14 @@
     const minEl = rootEl?.querySelector('#cca-min');
     const stopEl = rootEl?.querySelector('#cca-stop-text');
     const protectEl = rootEl?.querySelector('#cca-protect-titles');
+    const sourcesPathEl = rootEl?.querySelector('#cca-sources-path');
     if (textEl) state.text = textEl.value;
     if (timesEl) state.times = Math.max(1, parseInt(timesEl.value, 10) || 1);
     if (markerEl) state.marker = markerEl.value;
     if (minEl) state.minNew = Math.max(1, parseInt(minEl.value, 10) || 1);
     if (stopEl) state.stopText = stopEl.value;
     if (protectEl) state.protectTitles = protectEl.value;
+    if (sourcesPathEl) state.nlmSourcesPath = sourcesPathEl.value;
 
     if (rootEl) {
       const maxInputs = rootEl.querySelectorAll('.cca-marker-max-input');
@@ -3532,13 +3871,69 @@
           stopText: state.stopText,
           protectTitles: state.protectTitles,
           nlmSectionOpen: state.nlmSectionOpen,
+          nlmSourcesSectionOpen: state.nlmSourcesSectionOpen,
+          nlmSourcesPath: state.nlmSourcesPath,
           configSectionOpen: state.configSectionOpen,
           visible: state.visible,
+          theme: state.theme,
+          invertPage: state.invertPage,
+          invertPanel: state.invertPanel,
         },
       });
     } catch {
       // storage indisponível
     }
+  }
+
+  function applyTheme(theme) {
+    state.theme = theme === 'light' ? 'light' : 'dark';
+    if (rootEl) {
+      rootEl.dataset.theme = state.theme;
+    }
+    const darkBtn = rootEl?.querySelector('#cca-theme-dark');
+    const lightBtn = rootEl?.querySelector('#cca-theme-light');
+    if (darkBtn && lightBtn) {
+      darkBtn.classList.toggle('active', state.theme === 'dark');
+      lightBtn.classList.toggle('active', state.theme === 'light');
+    }
+  }
+
+  function setTheme(theme) {
+    applyTheme(theme);
+    persistUiFields();
+  }
+
+  function applyInversion() {
+    if (state.invertPage) {
+      document.documentElement.dataset.ccaInvert = '1';
+    } else {
+      delete document.documentElement.dataset.ccaInvert;
+    }
+    if (rootEl) {
+      rootEl.dataset.invert = state.invertPanel ? '1' : '0';
+      const panelBtn = rootEl.querySelector('#cca-invert-panel');
+      const pageBtn = rootEl.querySelector('#cca-invert-page');
+      if (panelBtn) {
+        panelBtn.classList.toggle('active', !!state.invertPanel);
+        panelBtn.textContent = state.invertPanel ? '✓ Extensão Invertida' : '🌓 Inverter Extensão';
+      }
+      if (pageBtn) {
+        pageBtn.classList.toggle('active', !!state.invertPage);
+        pageBtn.textContent = state.invertPage ? '✓ Página Invertida' : '🌐 Inverter Página';
+      }
+    }
+  }
+
+  function toggleInvertPage() {
+    state.invertPage = !state.invertPage;
+    applyInversion();
+    persistUiFields();
+  }
+
+  function toggleInvertPanel() {
+    state.invertPanel = !state.invertPanel;
+    applyInversion();
+    persistUiFields();
   }
 
   function isSavedText(text) {
@@ -3891,6 +4286,21 @@
     setNlmSectionOpen(!state.nlmSectionOpen);
   }
 
+  function setNlmSourcesSectionOpen(open) {
+    state.nlmSourcesSectionOpen = !!open;
+    const section = rootEl?.querySelector('#cca-nlm-sources-section');
+    if (section) section.dataset.open = state.nlmSourcesSectionOpen ? '1' : '0';
+    const toggle = rootEl?.querySelector('#cca-nlm-sources-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', state.nlmSourcesSectionOpen ? 'true' : 'false');
+    }
+    persistUiFields();
+  }
+
+  function toggleNlmSourcesSection() {
+    setNlmSourcesSectionOpen(!state.nlmSourcesSectionOpen);
+  }
+
   function setConfigSectionOpen(open) {
     state.configSectionOpen = !!open;
     const section = rootEl?.querySelector('#cca-config-section');
@@ -4130,9 +4540,81 @@
     rootEl = document.createElement('div');
     rootEl.id = 'cca-root';
     rootEl.dataset.hidden = state.visible ? '0' : '1';
+    rootEl.dataset.theme = state.theme || 'dark';
     rootEl.innerHTML = `
       <div id="cca-panel" data-open="0">
-        <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
+        <div class="cca-header-row">
+          <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
+          <button type="button" id="cca-settings-btn" class="cca-settings-icon-btn" title="Configurações (tema e ajuda)">⚙️</button>
+        </div>
+
+        <div id="cca-settings-menu" class="cca-settings-menu" style="display:none;">
+          <div class="cca-settings-menu-header">
+            <strong>Configurações</strong>
+            <button type="button" id="cca-close-settings" class="cca-btn-mini" style="padding:1px 5px;">✕</button>
+          </div>
+          
+          <div class="cca-settings-row">
+            <span class="cca-settings-label">Tema da extensão:</span>
+            <div class="cca-theme-toggle-wrap">
+              <button type="button" id="cca-theme-dark" class="cca-theme-btn ${state.theme === 'dark' ? 'active' : ''}" title="Tema Escuro">🌙 Escuro</button>
+              <button type="button" id="cca-theme-light" class="cca-theme-btn ${state.theme === 'light' ? 'active' : ''}" title="Tema Claro">☀️ Claro</button>
+            </div>
+          </div>
+
+          <div class="cca-settings-row" style="margin-top:8px;">
+            <span class="cca-settings-label">Inversão de cores:</span>
+            <div class="cca-theme-toggle-wrap">
+              <button type="button" id="cca-invert-panel" class="cca-theme-btn ${state.invertPanel ? 'active' : ''}" title="Inverter todas as cores dos botões, ícones e elementos da extensão">
+                ${state.invertPanel ? '✓ Extensão Invertida' : '🌓 Inverter Extensão'}
+              </button>
+              <button type="button" id="cca-invert-page" class="cca-theme-btn ${state.invertPage ? 'active' : ''}" title="Inverter cores da página do navegador (NotebookLM/chats)">
+                ${state.invertPage ? '✓ Página Invertida' : '🌐 Inverter Página'}
+              </button>
+            </div>
+          </div>
+
+          <div class="cca-settings-row" style="margin-top:8px;">
+            <button type="button" id="cca-linux-help-btn" class="cca-btn-secondary" style="width:100%; justify-content:center; display:flex; gap:6px; align-items:center;">
+              <span>🐧</span> Ajuda Linux (Flatpak, Brave, Flatseal)
+            </button>
+          </div>
+
+          <div id="cca-linux-help-box" class="cca-linux-help-box" style="display:none; margin-top:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <strong style="color:#60a5fa; font-size:11px;">🐧 Ajuda Linux (Flatpak, Flatseal, Brave)</strong>
+              <button type="button" id="cca-close-linux-help" class="cca-btn-mini" style="padding:1px 5px;">✕</button>
+            </div>
+
+            <div style="font-size:10px; color:#fbbf24; font-weight:600; margin-top:4px;">1. SE A API ESTIVER DESATIVADA NO BRAVE:</div>
+            <div style="font-size:10px; color:#8b949e; margin:2px 0;">Cole no Brave, marque Enabled e reinicie:</div>
+            <div class="cca-cmd-row">
+              <code>brave://flags/#file-system-access-api</code>
+              <button type="button" class="cca-btn-copy" data-cca-copy="brave://flags/#file-system-access-api">Copiar</button>
+            </div>
+
+            <div style="font-size:10px; color:#fbbf24; font-weight:600; margin-top:6px;">2. LINUX FLATPAK (BAZZITE, FEDORA, ETC.):</div>
+            <div style="font-size:10px; color:#8b949e; margin:2px 0;">Libere acesso às pastas locais no terminal:</div>
+            <div class="cca-cmd-row">
+              <code>flatpak override --user --filesystem=home com.google.Chrome</code>
+              <button type="button" class="cca-btn-copy" data-cca-copy="flatpak override --user --filesystem=home com.google.Chrome">Chrome</button>
+            </div>
+            <div class="cca-cmd-row">
+              <code>flatpak override --user --filesystem=home com.brave.Browser</code>
+              <button type="button" class="cca-btn-copy" data-cca-copy="flatpak override --user --filesystem=home com.brave.Browser">Brave</button>
+            </div>
+            <div class="cca-cmd-row">
+              <code>flatpak override --user --filesystem=home org.chromium.Chromium</code>
+              <button type="button" class="cca-btn-copy" data-cca-copy="flatpak override --user --filesystem=home org.chromium.Chromium">Chromium</button>
+            </div>
+
+            <div style="font-size:10px; color:#fbbf24; font-weight:600; margin-top:6px;">3. MODO GRÁFICO (FLATSEAL):</div>
+            <div style="font-size:10px; color:#8b949e; margin:2px 0;">
+              Abra o Flatseal → selecione o navegador → em <b>Filesystem</b>, marque <b>All user files</b>.
+            </div>
+          </div>
+        </div>
+
         <label for="cca-text" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">Texto a inserir após a IA terminar <span class="cca-info" title="Texto que será digitado e enviado automaticamente no chat a cada repetição após a IA concluir a resposta.">ⓘ</span></label>
         <div id="cca-text-picker">
           <textarea id="cca-text" spellcheck="false"
@@ -4152,9 +4634,9 @@
           </div>
         </div>
         <div id="cca-config-section" data-open="0">
-          <button type="button" id="cca-config-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-config-body" title="Mostrar ou ocultar configurações">
+          <button type="button" id="cca-config-toggle" class="cca-collapse-toggle" aria-expanded="false" aria-controls="cca-config-body" title="Mostrar ou ocultar preferências">
             <span class="cca-collapse-chevron" aria-hidden="true">▸</span>
-            <span>Configuração</span>
+            <span>Preferências</span>
           </button>
           <div id="cca-config-body" class="cca-collapse-body" role="region" aria-labelledby="cca-config-toggle">
             <label for="cca-marker" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">Strings aceitas na resposta (separe com ;) <span class="cca-info" title="Alternativas aceitas na resposta, separadas por ponto e vírgula. Basta a resposta conter qualquer uma delas. Deixe vazio para não exigir string.">ⓘ</span></label>
@@ -4179,6 +4661,44 @@
             <input id="cca-stop-text" type="text" spellcheck="false"
               placeholder="ex.: COMANDO FINALIZADO"
               title="Texto de parada verificado após a IA terminar a resposta. Se presente, encerra o ciclo de envios." />
+          </div>
+        </div>
+        <div id="cca-nlm-sources-section" style="display:none" data-open="1">
+          <hr class="cca-sep" />
+          <button type="button" id="cca-nlm-sources-toggle" class="cca-collapse-toggle" aria-expanded="true" aria-controls="cca-nlm-sources-body" title="Adicionar fontes locais ao NotebookLM">
+            <span class="cca-collapse-chevron" aria-hidden="true">▸</span>
+            <span>NotebookLM — adicionar fontes</span>
+          </button>
+          <div id="cca-nlm-sources-body" class="cca-collapse-body" role="region" aria-labelledby="cca-nlm-sources-toggle">
+            <div class="cca-folder-status-row">
+              <span id="cca-folder-status-text">Pasta raiz: <strong id="cca-folder-name">Verificando...</strong></span>
+              <button type="button" id="cca-connect-folder-btn" class="cca-btn-mini" title="Conectar pasta raiz dos concursos via seletor">Conectar pasta</button>
+            </div>
+
+            <label for="cca-sources-path" title="Caminho completo ou relativo da pasta contendo as fontes (ex: C:\...\mapas\MAP-T8MW4U ou mapas/MAP-T8MW4U)">
+              Caminho da pasta com as fontes:
+            </label>
+            <div class="cca-path-input-group">
+              <input id="cca-sources-path" type="text" spellcheck="false"
+                placeholder="ex.: mapas/MAP-T8MW4U ou C:\...\MAP-T8MW4U"
+                title="Cole ou digite o caminho da pasta onde estão os arquivos de fontes" />
+              <button type="button" id="cca-add-sources-manual" class="cca-btn-path-addon" title="Enviar arquivos da pasta digitada ao lado">
+                ⬆️
+              </button>
+            </div>
+
+            <div class="cca-nlm-actions" style="margin-top:8px; flex-direction:column; gap:6px;">
+              <button type="button" id="cca-paste-and-add-sources" class="cca-btn-primary" title="Lê o caminho copiado na área de transferência e envia como ARQUIVOS no NotebookLM">
+                📁 Colar da Área de Transf. & Enviar Arquivos
+              </button>
+              <button type="button" id="cca-paste-text-sources" class="cca-btn-secondary" title="Envia como Texto Copiado (para notas markdown ou de texto puro)">
+                📋 Como Texto Copiado
+              </button>
+            </div>
+
+            <p class="cca-nlm-hint">
+              Conecte a pasta raiz uma vez. Depois, copie o caminho da pasta (ex.: MAP-T8MW4U) e clique no botão acima para carregar automaticamente todas as fontes no NotebookLM.
+            </p>
           </div>
         </div>
         <div id="cca-nlm-section" style="display:none" data-open="0">
@@ -4237,6 +4757,8 @@
     const stopEl = rootEl.querySelector('#cca-stop-text');
     const protectEl = rootEl.querySelector('#cca-protect-titles');
     const nlmSection = rootEl.querySelector('#cca-nlm-section');
+    const nlmSourcesSection = rootEl.querySelector('#cca-nlm-sources-section');
+    const sourcesPathEl = rootEl.querySelector('#cca-sources-path');
 
     textEl.value = state.text;
     timesEl.value = String(state.times);
@@ -4244,10 +4766,16 @@
     minEl.value = String(state.minNew);
     stopEl.value = state.stopText;
     if (protectEl) protectEl.value = state.protectTitles;
+    if (sourcesPathEl) sourcesPathEl.value = state.nlmSourcesPath || '';
     if (nlmSection) {
       nlmSection.style.display = isNotebookLM() ? '' : 'none';
       nlmSection.dataset.open = state.nlmSectionOpen ? '1' : '0';
     }
+    if (nlmSourcesSection) {
+      nlmSourcesSection.style.display = isNotebookLM() ? '' : 'none';
+      nlmSourcesSection.dataset.open = state.nlmSourcesSectionOpen ? '1' : '0';
+    }
+    updateConnectedFolderStatus();
     const configSection = rootEl.querySelector('#cca-config-section');
     if (configSection) {
       configSection.dataset.open = state.configSectionOpen ? '1' : '0';
@@ -4410,8 +4938,151 @@
       });
     }
     updateDeleteButtons();
+
+    // Listeners do menu de configurações e tema
+    const settingsBtn = rootEl.querySelector('#cca-settings-btn');
+    const settingsMenu = rootEl.querySelector('#cca-settings-menu');
+    const closeSettingsBtn = rootEl.querySelector('#cca-close-settings');
+    if (settingsBtn && settingsMenu) {
+      settingsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isVis = settingsMenu.style.display === 'block';
+        settingsMenu.style.display = isVis ? 'none' : 'block';
+      });
+    }
+    if (closeSettingsBtn && settingsMenu) {
+      closeSettingsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        settingsMenu.style.display = 'none';
+      });
+    }
+
+    const darkBtn = rootEl.querySelector('#cca-theme-dark');
+    const lightBtn = rootEl.querySelector('#cca-theme-light');
+    if (darkBtn) {
+      darkBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setTheme('dark');
+      });
+    }
+    if (lightBtn) {
+      lightBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setTheme('light');
+      });
+    }
+
+    const invertPageBtn = rootEl.querySelector('#cca-invert-page');
+    const invertPanelBtn = rootEl.querySelector('#cca-invert-panel');
+    if (invertPageBtn) {
+      invertPageBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleInvertPage();
+      });
+    }
+    if (invertPanelBtn) {
+      invertPanelBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleInvertPanel();
+      });
+    }
+
+    // Listeners da seção de fontes do NotebookLM
+    const nlmSourcesToggle = rootEl.querySelector('#cca-nlm-sources-toggle');
+    if (nlmSourcesToggle) {
+      nlmSourcesToggle.setAttribute('aria-expanded', state.nlmSourcesSectionOpen ? 'true' : 'false');
+      nlmSourcesToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleNlmSourcesSection();
+      });
+    }
+
+    const connectFolderBtn = rootEl.querySelector('#cca-connect-folder-btn');
+    if (connectFolderBtn) {
+      connectFolderBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openRootFolderPicker();
+      });
+    }
+
+    const pasteAddSourcesBtn = rootEl.querySelector('#cca-paste-and-add-sources');
+    if (pasteAddSourcesBtn) {
+      pasteAddSourcesBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void pasteAndAddSourcesToNotebookLM('file');
+      });
+    }
+
+    const pasteTextSourcesBtn = rootEl.querySelector('#cca-paste-text-sources');
+    if (pasteTextSourcesBtn) {
+      pasteTextSourcesBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void pasteAndAddSourcesToNotebookLM('text');
+      });
+    }
+
+    const addSourcesManualBtn = rootEl.querySelector('#cca-add-sources-manual');
+    if (addSourcesManualBtn) {
+      addSourcesManualBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void addSourcesFromPathInput('file');
+      });
+    }
+
+    const linuxHelpBtn = rootEl.querySelector('#cca-linux-help-btn');
+    const linuxHelpBox = rootEl.querySelector('#cca-linux-help-box');
+    const closeLinuxHelpBtn = rootEl.querySelector('#cca-close-linux-help');
+    if (linuxHelpBtn && linuxHelpBox) {
+      linuxHelpBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isVis = linuxHelpBox.style.display === 'block';
+        linuxHelpBox.style.display = isVis ? 'none' : 'block';
+      });
+    }
+    if (closeLinuxHelpBtn && linuxHelpBox) {
+      closeLinuxHelpBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        linuxHelpBox.style.display = 'none';
+      });
+    }
+
+    rootEl.querySelectorAll('.cca-btn-copy[data-cca-copy]').forEach((btnCopy) => {
+      btnCopy.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const textToCopy = btnCopy.getAttribute('data-cca-copy');
+        if (!textToCopy) return;
+        try {
+          await navigator.clipboard.writeText(textToCopy);
+          const originalText = btnCopy.textContent;
+          btnCopy.textContent = '✓ Copiado!';
+          btnCopy.classList.add('copied');
+          setTimeout(() => {
+            btnCopy.textContent = originalText;
+            btnCopy.classList.remove('copied');
+          }, 1500);
+        } catch (cErr) {
+          console.warn('[CCA] Falha ao copiar texto:', cErr);
+        }
+      });
+    });
+
     const persistEls = [textEl, timesEl, markerEl, minEl, stopEl];
     if (protectEl) persistEls.push(protectEl);
+    if (sourcesPathEl) persistEls.push(sourcesPathEl);
     for (const el of persistEls) {
       el.addEventListener('input', persistUiFields);
       el.addEventListener('change', persistUiFields);
@@ -4504,14 +5175,23 @@
           typeof s.protectTitles === 'string' ? s.protectTitles : DEFAULTS.protectTitles;
         state.nlmSectionOpen =
           typeof s.nlmSectionOpen === 'boolean' ? s.nlmSectionOpen : DEFAULTS.nlmSectionOpen;
+        state.nlmSourcesSectionOpen =
+          typeof s.nlmSourcesSectionOpen === 'boolean' ? s.nlmSourcesSectionOpen : DEFAULTS.nlmSourcesSectionOpen;
+        state.nlmSourcesPath =
+          typeof s.nlmSourcesPath === 'string' ? s.nlmSourcesPath : DEFAULTS.nlmSourcesPath;
         state.configSectionOpen =
           typeof s.configSectionOpen === 'boolean'
             ? s.configSectionOpen
             : (typeof s.markerMaxOpen === 'boolean' ? s.markerMaxOpen : DEFAULTS.configSectionOpen);
         state.visible =
           typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
+        state.theme = s.theme === 'light' ? 'light' : 'dark';
+        state.invertPage = typeof s.invertPage === 'boolean' ? s.invertPage : DEFAULTS.invertPage;
+        state.invertPanel = typeof s.invertPanel === 'boolean' ? s.invertPanel : DEFAULTS.invertPanel;
+        applyInversion();
         if (rootEl) {
           rootEl.dataset.hidden = state.visible ? '0' : '1';
+          applyTheme(state.theme);
         }
         cb();
       });
@@ -4521,6 +5201,11 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === 'cca-folder-connected') {
+      updateConnectedFolderStatus();
+      sendResponse?.({ ok: true });
+      return true;
+    }
     if (msg?.type === 'cca-ping') {
       sendResponse({ ok: true });
       return true;
@@ -4639,5 +5324,6 @@
     buildUi();
     scanForClassInfo();
     setInterval(runHeartbeat, POLL_MS);
+    console.log(`[CCA] Chat Continue Auto v${extVersion} carregado e ativo.`);
   });
 })();

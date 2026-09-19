@@ -740,3 +740,567 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* === Seção NotebookLM Fontes Locais & Ajuda Linux === */
+#cca-nlm-sources-section[data-open="1"] .cca-collapse-chevron {
+  transform: rotate(90deg);
+}
+
+#cca-nlm-sources-section[data-open="1"] .cca-collapse-body {
+  display: block;
+}
+
+.cca-folder-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.cca-folder-status-row strong {
+  color: #58a6ff;
+}
+
+.cca-btn-mini {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.cca-btn-mini:hover {
+  background: #30363d;
+  color: #f0f6fc;
+  border-color: #8b949e;
+}
+
+.cca-btn-primary {
+  background: #238636 !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(240, 246, 252, 0.1) !important;
+}
+
+.cca-btn-primary:hover:not(:disabled) {
+  background: #2ea043 !important;
+}
+
+.cca-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cca-btn-secondary {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.cca-btn-secondary:hover:not(:disabled) {
+  background: #30363d !important;
+  color: #f0f6fc !important;
+  border-color: #8b949e !important;
+}
+
+.cca-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* === Cabeçalho com Ícone de Configurações === */
+.cca-header-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-bottom: 10px;
+}
+
+.cca-header-row h2 {
+  margin: 0 !important;
+}
+
+.cca-settings-icon-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all .15s ease;
+  line-height: 1;
+  color: inherit;
+}
+
+.cca-settings-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: rotate(35deg);
+}
+
+/* === Menu Dropdown de Configurações / Tema / Ajuda === */
+.cca-settings-menu {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.cca-settings-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #30363d;
+  font-size: 12px;
+  color: #e6edf3;
+}
+
+.cca-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.cca-settings-label {
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.cca-theme-toggle-wrap {
+  display: flex;
+  gap: 6px;
+}
+
+.cca-theme-btn {
+  flex: 1;
+  padding: 6px 8px;
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.cca-theme-btn:hover {
+  background: #30363d;
+  color: #f0f6fc;
+}
+
+.cca-theme-btn.active {
+  background: #1f6feb;
+  color: #ffffff;
+  border-color: #388bfd;
+  font-weight: 600;
+  box-shadow: 0 0 8px rgba(31, 111, 235, 0.4);
+}
+
+/* === Input com Botão de Ação Integrado (Caminho da Pasta) === */
+.cca-path-input-group {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cca-path-input-group input {
+  flex: 1 !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+}
+
+.cca-btn-path-addon {
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #238636;
+  color: #ffffff;
+  border: 1px solid rgba(240, 246, 252, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  transition: background .15s, transform .1s;
+  padding: 0;
+}
+
+.cca-btn-path-addon:hover {
+  background: #2ea043;
+  transform: scale(1.04);
+}
+
+.cca-btn-path-addon:active {
+  transform: scale(0.96);
+}
+
+.cca-linux-help-box {
+  margin-top: 8px;
+  background: #0d1117;
+  border: 1px solid #388bfd;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.cca-cmd-row {
+  display: flex;
+  align-items: center;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  gap: 6px;
+}
+
+.cca-cmd-row code {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: #79c0ff;
+  word-break: break-all;
+}
+
+.cca-btn-copy {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+
+.cca-btn-copy:hover {
+  background: #30363d;
+  color: #fff;
+}
+
+.cca-btn-copy.copied {
+  background: #238636;
+  border-color: #2ea043;
+  color: #fff;
+}
+
+.cca-nlm-highlighted-btn {
+  animation: cca-nlm-pulse 1.2s infinite alternate !important;
+}
+
+@keyframes cca-nlm-pulse {
+  from {
+    outline: 3px solid #22c55e !important;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.6) !important;
+  }
+  to {
+    outline: 4px solid #4ade80 !important;
+    box-shadow: 0 0 25px rgba(74, 222, 128, 0.95) !important;
+  }
+}
+
+/* ==========================================================================
+   TEMA CLARO (LIGHT THEME)
+   ========================================================================== */
+#cca-root[data-theme="light"] {
+  color-scheme: light;
+}
+
+#cca-root[data-theme="light"] #cca-panel {
+  background: #ffffff !important;
+  color: #1f2328 !important;
+  border-color: #d0d7de !important;
+  box-shadow: 0 12px 36px rgba(140, 149, 159, 0.25) !important;
+}
+
+#cca-root[data-theme="light"] #cca-panel h2 {
+  color: #1f2328 !important;
+}
+
+#cca-root[data-theme="light"] #cca-panel label {
+  color: #57606a !important;
+}
+
+#cca-root[data-theme="light"] #cca-panel textarea,
+#cca-root[data-theme="light"] #cca-panel input[type="text"],
+#cca-root[data-theme="light"] #cca-panel input[type="number"] {
+  background: #f6f8fa !important;
+  border-color: #d0d7de !important;
+  color: #1f2328 !important;
+}
+
+#cca-root[data-theme="light"] #cca-panel textarea:focus,
+#cca-root[data-theme="light"] #cca-panel input[type="text"]:focus,
+#cca-root[data-theme="light"] #cca-panel input[type="number"]:focus {
+  background: #ffffff !important;
+  border-color: #0969da !important;
+}
+
+#cca-root[data-theme="light"] #cca-panel input[type="text"]::placeholder,
+#cca-root[data-theme="light"] #cca-panel textarea::placeholder {
+  color: #8c959f !important;
+}
+
+#cca-root[data-theme="light"] .cca-settings-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+#cca-root[data-theme="light"] .cca-settings-menu {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  box-shadow: 0 4px 14px rgba(140, 149, 159, 0.2);
+}
+
+#cca-root[data-theme="light"] .cca-settings-menu-header {
+  border-bottom-color: #d0d7de;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] .cca-settings-label {
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] .cca-theme-btn {
+  background: #ffffff;
+  color: #1f2328;
+  border-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-theme-btn:hover {
+  background: #eaeef2;
+}
+
+#cca-root[data-theme="light"] .cca-theme-btn.active {
+  background: #0969da;
+  color: #ffffff;
+  border-color: #0969da;
+}
+
+#cca-root[data-theme="light"] .cca-collapse-toggle {
+  color: #1f2328 !important;
+}
+
+#cca-root[data-theme="light"] .cca-collapse-toggle:hover {
+  background: #f6f8fa !important;
+}
+
+#cca-root[data-theme="light"] .cca-collapse-chevron {
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] .cca-sep {
+  border-top-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] #cca-status {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] #cca-count {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] #cca-timer {
+  background: #f6f8fa;
+  border-color: #0969da;
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] #cca-timer strong {
+  color: #0969da;
+}
+
+#cca-root[data-theme="light"] #cca-stop {
+  background: #f6f8fa;
+  border-color: #d0d7de !important;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] #cca-stop:hover {
+  background: #eaeef2;
+  border-color: #afb8c1 !important;
+}
+
+#cca-root[data-theme="light"] #cca-copy-page {
+  background: #f6f8fa;
+  border-color: #d0d7de !important;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] #cca-copy-page:hover {
+  background: #eaeef2;
+  border-color: #0969da !important;
+  color: #0969da;
+}
+
+#cca-root[data-theme="light"] #cca-copy-page.cca-copied {
+  background: #dafbe1 !important;
+  border-color: #1a7f37 !important;
+  color: #1a7f37 !important;
+}
+
+#cca-root[data-theme="light"] #cca-hint,
+#cca-root[data-theme="light"] .cca-nlm-hint {
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] .cca-folder-status-row {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  color: #57606a;
+}
+
+#cca-root[data-theme="light"] .cca-folder-status-row strong {
+  color: #0969da;
+}
+
+#cca-root[data-theme="light"] .cca-btn-mini {
+  background: #f6f8fa;
+  color: #1f2328;
+  border-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-btn-mini:hover {
+  background: #eaeef2;
+  border-color: #afb8c1;
+}
+
+#cca-root[data-theme="light"] .cca-btn-secondary {
+  background: #f6f8fa !important;
+  color: #1f2328 !important;
+  border-color: #d0d7de !important;
+}
+
+#cca-root[data-theme="light"] .cca-btn-secondary:hover:not(:disabled) {
+  background: #eaeef2 !important;
+  border-color: #afb8c1 !important;
+}
+
+#cca-root[data-theme="light"] .cca-linux-help-box {
+  background: #f6f8fa;
+  border-color: #0969da;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] .cca-cmd-row {
+  background: #ffffff;
+  border-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-cmd-row code {
+  color: #0550ae;
+}
+
+#cca-root[data-theme="light"] .cca-btn-copy {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] .cca-btn-copy:hover {
+  background: #eaeef2;
+}
+
+#cca-root[data-theme="light"] #cca-saved-dropdown {
+  background: #ffffff;
+  border-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-saved-header {
+  background: #f6f8fa;
+  border-bottom-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-saved-row {
+  border-top-color: #d0d7de;
+}
+
+#cca-root[data-theme="light"] .cca-saved-row:hover {
+  background: #f6f8fa;
+}
+
+#cca-root[data-theme="light"] .cca-saved-select {
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] .cca-marker-max-row {
+  border-color: #d0d7de;
+  background: #f6f8fa;
+}
+
+#cca-root[data-theme="light"] .cca-marker-max-row code {
+  color: #0550ae;
+}
+
+#cca-root[data-theme="light"] #cca-stop-delete-notebooks {
+  background: #f6f8fa;
+  border-color: #d0d7de !important;
+  color: #1f2328;
+}
+
+#cca-root[data-theme="light"] #cca-stop-delete-notebooks:hover:not(:disabled) {
+  background: #eaeef2;
+}
+
+/* ==========================================================================
+   INVERSÃO DE CORES (COLOR INVERSION)
+   ========================================================================== */
+html[data-cca-invert="1"] {
+  filter: invert(1) hue-rotate(180deg) !important;
+  background-color: #121212 !important;
+}
+
+html[data-cca-invert="1"] img,
+html[data-cca-invert="1"] video,
+html[data-cca-invert="1"] picture,
+html[data-cca-invert="1"] iframe {
+  filter: invert(1) hue-rotate(180deg) !important;
+}
+
+/* 1. Página normal, Extensão invertida: inverte 100% das cores, botões e ícones da extensão */
+html:not([data-cca-invert="1"]) #cca-root[data-invert="1"] {
+  filter: invert(1) !important;
+}
+
+/* 2. Página invertida, Extensão normal: cancela a inversão da página para manter a extensão normal */
+html[data-cca-invert="1"] #cca-root:not([data-invert="1"]) {
+  filter: invert(1) hue-rotate(180deg) !important;
+}
+
+/* 3. Página invertida E Extensão invertida: neutraliza o hue-rotate para inversão pura de cores em botões e ícones */
+html[data-cca-invert="1"] #cca-root[data-invert="1"] {
+  filter: hue-rotate(180deg) !important;
+}
+
