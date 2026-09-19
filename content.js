@@ -67,6 +67,8 @@
     invertPage: false,
     /** Inversão de cores do painel da extensão. */
     invertPanel: false,
+    /** Envio automático de arquivos ao NotebookLM. */
+    autoUploadFiles: true,
   };
   /** Default antigo — migra para o novo se o usuário nunca personalizou. */
   const LEGACY_DEFAULT_TEXTS = new Set([
@@ -195,6 +197,8 @@
     invertPage: DEFAULTS.invertPage,
     /** Inversão de cores do painel ativa. */
     invertPanel: DEFAULTS.invertPanel,
+    /** Envio automático de arquivos habilitado. */
+    autoUploadFiles: DEFAULTS.autoUploadFiles,
     /** Menu de configurações (tema e ajuda) aberto. */
     settingsMenuOpen: false,
   };
@@ -2044,7 +2048,7 @@
         lastObservedUrl = location.href;
         dlog('runHeartbeat: URL alterada no NotebookLM para:', lastObservedUrl);
         void autoCaptureClipboardPath();
-      } else if (isNotebookLMNotebookPage() && state.nlmSourcesPath && !userDismissedModal && lastUploadedPath !== state.nlmSourcesPath) {
+      } else if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath && !userDismissedModal && lastUploadedPath !== state.nlmSourcesPath) {
         const dialog = getNotebookLMOpenDialog();
         if (dialog && !isNotebookLMModalButtonHighlighted()) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
@@ -3509,8 +3513,8 @@
   async function autoArmAndHighlightModalUpload(targetPath, force = false) {
     if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
     if (isAutoArming) return;
-    // Se o modal foi fechado pelo usuário ou a pasta já foi enviada, não re-abre nem re-arma sozinho
-    if (!force && (lastUploadedPath === targetPath || userDismissedModal)) return;
+    // Se o envio automático estiver desabilitado, ou modal foi fechado pelo usuário ou a pasta já foi enviada, não re-abre nem re-arma sozinho
+    if (!force && (!state.autoUploadFiles || lastUploadedPath === targetPath || userDismissedModal)) return;
 
     // CRUCIAL: Só executa preparação se o modal de fontes do NotebookLM estiver REALMENTE aberto na tela!
     const dialog = getNotebookLMOpenDialog();
@@ -3570,7 +3574,7 @@
       if (!clean) {
         if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
           if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
+          if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3581,7 +3585,7 @@
       if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
         if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
           if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
+          if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3605,15 +3609,15 @@
       }
       dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
 
-      // Só prepara/destaca o botão no modal do NotebookLM se o modal de fontes já estiver aberto!
-      if (isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal && getNotebookLMOpenDialog()) {
+      // Só prepara/destaca o botão no modal do NotebookLM se envio automático estiver ativo e o modal de fontes já estiver aberto!
+      if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal && getNotebookLMOpenDialog()) {
         void autoArmAndHighlightModalUpload(clean, isNewPath);
       }
     } catch (e) {
       dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
       if (state.nlmSourcesPath && isNotebookLM() && !userDismissedModal) {
         highlightSendButton(true, state.nlmSourcesPath);
-        if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && getNotebookLMOpenDialog()) {
+        if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && getNotebookLMOpenDialog()) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
         }
       }
@@ -4078,6 +4082,9 @@
       }
     }
 
+    const autoUploadEl = rootEl?.querySelector('#cca-auto-upload-files') || rootEl?.querySelector('#cca-auto-upload-files-section');
+    if (autoUploadEl) state.autoUploadFiles = autoUploadEl.checked;
+
     try {
       chrome.storage.local.set({
         [STORAGE_KEY]: {
@@ -4097,6 +4104,7 @@
           theme: state.theme,
           invertPage: state.invertPage,
           invertPanel: state.invertPanel,
+          autoUploadFiles: state.autoUploadFiles,
         },
       });
     } catch {
@@ -4793,6 +4801,13 @@
             </div>
           </div>
 
+          <div class="cca-settings-row" style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08);">
+            <label class="cca-settings-checkbox-label" style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; user-select:none;" title="Quando ativado, envia automaticamente os arquivos da pasta detectada ao abrir o modal do NotebookLM">
+              <input type="checkbox" id="cca-auto-upload-files" ${state.autoUploadFiles ? 'checked' : ''} style="cursor:pointer; width:15px; height:15px; margin:0;" />
+              <span>Envio automático de arquivos</span>
+            </label>
+          </div>
+
           <div class="cca-settings-row" style="margin-top:8px;">
             <button type="button" id="cca-linux-help-btn" class="cca-btn-secondary" style="width:100%; justify-content:center; display:flex; gap:6px; align-items:center;">
               <span>🐧</span> Ajuda Linux (Flatpak, Brave, Flatseal)
@@ -4904,6 +4919,13 @@
               <button type="button" id="cca-add-sources-manual" class="cca-btn-path-addon" title="Enviar arquivos da pasta digitada ao lado">
                 ⬆️
               </button>
+            </div>
+
+            <div style="margin-top:6px;">
+              <label style="display:flex; align-items:center; gap:7px; font-size:11px; cursor:pointer; user-select:none; color:inherit; opacity:0.9;" title="Habilita ou desabilita o envio automático dos arquivos ao abrir o modal">
+                <input type="checkbox" id="cca-auto-upload-files-section" ${state.autoUploadFiles ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0;" />
+                <span>Envio automático de arquivos</span>
+              </label>
             </div>
 
             <div class="cca-nlm-actions" style="margin-top:8px; flex-direction:column; gap:6px;">
@@ -5212,6 +5234,34 @@
       });
     }
 
+    // Listeners do checkbox de envio automático de arquivos
+    const autoUploadCheck = rootEl.querySelector('#cca-auto-upload-files');
+    const autoUploadSectionCheck = rootEl.querySelector('#cca-auto-upload-files-section');
+    function setAutoUploadFiles(enabled) {
+      state.autoUploadFiles = !!enabled;
+      if (autoUploadCheck) autoUploadCheck.checked = state.autoUploadFiles;
+      if (autoUploadSectionCheck) autoUploadSectionCheck.checked = state.autoUploadFiles;
+      persistUiFields();
+      if (!state.autoUploadFiles) {
+        setStatus('Envio automático de arquivos desabilitado.');
+      } else {
+        setStatus('Envio automático de arquivos habilitado.');
+        if (state.nlmSourcesPath && isNotebookLMNotebookPage() && getNotebookLMOpenDialog()) {
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
+        }
+      }
+    }
+    if (autoUploadCheck) {
+      autoUploadCheck.addEventListener('change', () => {
+        setAutoUploadFiles(autoUploadCheck.checked);
+      });
+    }
+    if (autoUploadSectionCheck) {
+      autoUploadSectionCheck.addEventListener('change', () => {
+        setAutoUploadFiles(autoUploadSectionCheck.checked);
+      });
+    }
+
     // Listeners da seção de fontes do NotebookLM
     const nlmSourcesToggle = rootEl.querySelector('#cca-nlm-sources-toggle');
     if (nlmSourcesToggle) {
@@ -5431,11 +5481,16 @@
         state.theme = s.theme === 'light' ? 'light' : 'dark';
         state.invertPage = typeof s.invertPage === 'boolean' ? s.invertPage : DEFAULTS.invertPage;
         state.invertPanel = typeof s.invertPanel === 'boolean' ? s.invertPanel : DEFAULTS.invertPanel;
+        state.autoUploadFiles = typeof s.autoUploadFiles === 'boolean' ? s.autoUploadFiles : DEFAULTS.autoUploadFiles;
         applyInversion();
         if (rootEl) {
           rootEl.dataset.hidden = state.visible ? '0' : '1';
           if (state.visible) setPanelOpen(true);
           applyTheme(state.theme);
+          const autoUploadEl = rootEl.querySelector('#cca-auto-upload-files');
+          if (autoUploadEl) autoUploadEl.checked = state.autoUploadFiles;
+          const autoUploadSectionEl = rootEl.querySelector('#cca-auto-upload-files-section');
+          if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
         }
         cb();
       });
@@ -5496,6 +5551,13 @@
             rootEl.dataset.hidden = state.visible ? '0' : '1';
             if (!state.visible) setPanelOpen(false);
           }
+        }
+        if (typeof newVal.autoUploadFiles === 'boolean' && newVal.autoUploadFiles !== state.autoUploadFiles) {
+          state.autoUploadFiles = newVal.autoUploadFiles;
+          const autoUploadEl = rootEl?.querySelector('#cca-auto-upload-files');
+          if (autoUploadEl) autoUploadEl.checked = state.autoUploadFiles;
+          const autoUploadSectionEl = rootEl?.querySelector('#cca-auto-upload-files-section');
+          if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
         }
       }
     });
