@@ -59,6 +59,8 @@
     configSectionOpen: false,
     /** Exibir ou ocultar o ícone da extensão no site. */
     visible: true,
+    /** Painel da extensão aberto por padrão ao carregar a página. */
+    panelOpen: true,
     /** Tema visual: 'dark' ou 'light'. */
     theme: 'dark',
     /** Inversão de cores da página (modo escuro/alto contraste). */
@@ -127,7 +129,7 @@
     retrySend: false,
     /** Último nudge do watchdog de progresso travado. */
     lastStuckNudgeAt: 0,
-    panelOpen: false,
+    panelOpen: DEFAULTS.panelOpen,
     /** Assinatura da última resposta (tamanho) para detectar estabilização. */
     lastReplySig: '',
     /** Elemento da última resposta; detecta até uma nova resposta com texto idêntico. */
@@ -230,6 +232,7 @@
   let detectedCommandType = '';
   let detectedClassLabel = '';
   let lastMonitoredUrl = location.href;
+  let lastObservedUrl = location.href;
   let lastClassScanAt = 0;
 
   const FORBIDDEN_WORDS = new Set([
@@ -904,7 +907,7 @@
   }
 
   function isNotebookLM() {
-    return /notebooklm\.google\.com$|notebook\.google\.com$/.test(host());
+    return /notebooklm\.google\.com$|notebook\.google\.com$|notebooklm\.google$/.test(host());
   }
 
   function visible(el) {
@@ -2032,6 +2035,20 @@
       if (needsScan && now - lastClassScanAt >= 2000) {
         lastClassScanAt = now;
         scanForClassInfo();
+      }
+    }
+
+    // NotebookLM: checa mudança de URL e garante que o botão do modal fique destacado
+    if (isNotebookLM()) {
+      if (location.href !== lastObservedUrl) {
+        lastObservedUrl = location.href;
+        dlog('runHeartbeat: URL alterada no NotebookLM para:', lastObservedUrl);
+        void autoCaptureClipboardPath();
+      } else if (isNotebookLMNotebookPage() && state.nlmSourcesPath) {
+        const dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+        if (dialog && !isNotebookLMModalButtonHighlighted()) {
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
+        }
       }
     }
 
@@ -3413,6 +3430,150 @@
     }
   }
 
+  function highlightSendButton(highlight = true, path = '') {
+    const pasteBtn = rootEl?.querySelector('#cca-paste-and-add-sources');
+    const addonBtn = rootEl?.querySelector('#cca-add-sources-manual');
+    const targetPath = (path || state.nlmSourcesPath || '').trim();
+
+    if (highlight && targetPath) {
+      pasteBtn?.classList.add('cca-btn-highlighted');
+      addonBtn?.classList.add('cca-btn-highlighted');
+      if (pasteBtn) {
+        const shortName = targetPath.split(/[/\\]/).filter(Boolean).pop() || targetPath;
+        pasteBtn.innerHTML = `📁 Enviar Arquivos: <strong>${shortName}</strong> ⬆️`;
+        pasteBtn.title = `Clique aqui para enviar os arquivos da pasta "${targetPath}" ao NotebookLM`;
+      }
+      if (addonBtn) {
+        addonBtn.title = `Enviar arquivos da pasta "${targetPath}" ao NotebookLM`;
+      }
+      setStatus(`Pasta detectada: <strong>${targetPath}</strong>. Clique em <strong>"Enviar Arquivos"</strong> para adicionar.`);
+    } else {
+      pasteBtn?.classList.remove('cca-btn-highlighted');
+      addonBtn?.classList.remove('cca-btn-highlighted');
+      if (pasteBtn) {
+        pasteBtn.innerHTML = '📁 Colar da Área de Transf. & Enviar Arquivos';
+        pasteBtn.title = 'Lê o caminho copiado na área de transferência e envia como ARQUIVOS no NotebookLM';
+      }
+    }
+  }
+
+  function isNotebookLMModalButtonHighlighted() {
+    try {
+      const dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
+      if (dialog && dialog.querySelector('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn')) {
+        return true;
+      }
+      const outside = Array.from(document.querySelectorAll('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn')).find(
+        (el) => !el.closest('#cca-root') && !el.id?.startsWith('cca-')
+      );
+      return Boolean(outside);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  let isAutoArming = false;
+  let lastAutoArmedPath = '';
+
+  async function autoArmAndHighlightModalUpload(targetPath, force = false) {
+    if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
+    if (isAutoArming) return;
+    // Evita chamadas repetidas desnecessárias se o botão do modal já estiver destacado
+    if (!force && lastAutoArmedPath === targetPath && isNotebookLMModalButtonHighlighted()) return;
+
+    isAutoArming = true;
+    lastAutoArmedPath = targetPath;
+    dlog('autoArmAndHighlightModalUpload: preparando fontes para destacar modal:', targetPath);
+
+    try {
+      chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: targetPath }, async (res) => {
+        isAutoArming = false;
+        if (!res?.ok) {
+          const errMsg = res?.message || res?.error || 'Erro ao ler pasta';
+          console.warn('[CCA] autoArmAndHighlightModalUpload falha:', errMsg);
+          if (res?.error === 'no_handle') {
+            setStatus('Clique em "Conectar pasta" para selecionar a pasta raiz dos arquivos.');
+          } else {
+            setStatus(`Pasta "${targetPath}": ${errMsg}`);
+          }
+          return;
+        }
+
+        const files = res.files;
+        if (!files || !files.length) {
+          setStatus(`Nenhum arquivo encontrado em "${res.folderName}".`);
+          return;
+        }
+
+        setStatus(`📁 <strong>${files.length}</strong> arquivo(s) prontos em "${res.folderName}". Destacando botão no modal…`);
+        try {
+          const result = await uploadFilesToNotebookLM(files, 'file');
+          if (result?.waitingManualClick) {
+            setStatus(
+              `👉 <strong>Pronto para adicionar!</strong> Dê <strong>1 clique no botão destacado em verde ("↑ Enviar arquivos")</strong> no centro da tela.<br>` +
+              `Os <strong>${result.count}</strong> arquivos serão inseridos diretamente no NotebookLM!`
+            );
+          }
+        } catch (uErr) {
+          console.warn('[CCA] Erro ao armar modal:', uErr);
+        }
+      });
+    } catch (err) {
+      isAutoArming = false;
+      console.warn('[CCA] autoArmAndHighlightModalUpload erro:', err);
+    }
+  }
+
+  async function autoCaptureClipboardPath() {
+    if (!isNotebookLM()) return;
+    try {
+      const clipText = (await navigator.clipboard.readText()) || '';
+      const clean = clipText.trim().replace(/^["']|["']$/g, '');
+      if (!clean) {
+        if (state.nlmSourcesPath) {
+          highlightSendButton(true, state.nlmSourcesPath);
+          if (isNotebookLMNotebookPage()) {
+            void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+          }
+        }
+        return;
+      }
+
+      // Evita capturar textos gigantes multilinhas (ex: prompts ou resumos gerados)
+      if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
+        if (state.nlmSourcesPath) {
+          highlightSendButton(true, state.nlmSourcesPath);
+          if (isNotebookLMNotebookPage()) {
+            void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+          }
+        }
+        return;
+      }
+
+      const inputEl = rootEl?.querySelector('#cca-sources-path');
+      if (inputEl && inputEl.value !== clean) {
+        inputEl.value = clean;
+      }
+      state.nlmSourcesPath = clean;
+      persistUiFields();
+      highlightSendButton(true, clean);
+      dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
+
+      // Inicia imediatamente a preparação das fontes e o destaque do botão no modal do NotebookLM!
+      if (isNotebookLMNotebookPage()) {
+        void autoArmAndHighlightModalUpload(clean, true);
+      }
+    } catch (e) {
+      dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
+      if (state.nlmSourcesPath && isNotebookLM()) {
+        highlightSendButton(true, state.nlmSourcesPath);
+        if (isNotebookLMNotebookPage()) {
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+        }
+      }
+    }
+  }
+
   async function pasteAndAddSourcesToNotebookLM(mode = 'file') {
     let clipText = '';
     try {
@@ -3455,6 +3616,7 @@
   }
 
   async function executeAddSources(targetPath, mode = 'file') {
+    highlightSendButton(false);
     if (!isNotebookLM()) {
       setStatus('Esta opção só funciona no NotebookLM.');
       return;
@@ -4542,7 +4704,7 @@
     rootEl.dataset.hidden = state.visible ? '0' : '1';
     rootEl.dataset.theme = state.theme || 'dark';
     rootEl.innerHTML = `
-      <div id="cca-panel" data-open="0">
+      <div id="cca-panel" data-open="${state.panelOpen ? '1' : '0'}">
         <div class="cca-header-row">
           <h2>Chat Continue Auto <small style="font-weight:normal;opacity:.6">v${extVersion}</small></h2>
           <button type="button" id="cca-settings-btn" class="cca-settings-icon-btn" title="Configurações (tema e ajuda)">⚙️</button>
@@ -5087,6 +5249,29 @@
       el.addEventListener('input', persistUiFields);
       el.addEventListener('change', persistUiFields);
     }
+
+    if (sourcesPathEl) {
+      sourcesPathEl.addEventListener('input', () => {
+        const val = sourcesPathEl.value.trim();
+        state.nlmSourcesPath = val;
+        if (val) {
+          highlightSendButton(true, val);
+        } else {
+          highlightSendButton(false);
+        }
+      });
+    }
+
+    if (state.visible) {
+      setPanelOpen(true);
+    }
+
+    if (isNotebookLM()) {
+      if (state.nlmSourcesPath) {
+        highlightSendButton(true, state.nlmSourcesPath);
+      }
+      void autoCaptureClipboardPath();
+    }
   }
 
   function loadSettings(cb) {
@@ -5185,12 +5370,14 @@
             : (typeof s.markerMaxOpen === 'boolean' ? s.markerMaxOpen : DEFAULTS.configSectionOpen);
         state.visible =
           typeof s.visible === 'boolean' ? s.visible : DEFAULTS.visible;
+        state.panelOpen = state.visible ? true : false;
         state.theme = s.theme === 'light' ? 'light' : 'dark';
         state.invertPage = typeof s.invertPage === 'boolean' ? s.invertPage : DEFAULTS.invertPage;
         state.invertPanel = typeof s.invertPanel === 'boolean' ? s.invertPanel : DEFAULTS.invertPanel;
         applyInversion();
         if (rootEl) {
           rootEl.dataset.hidden = state.visible ? '0' : '1';
+          if (state.visible) setPanelOpen(true);
           applyTheme(state.theme);
         }
         cb();
@@ -5311,9 +5498,53 @@
     } catch {}
   }, true);
 
-  // Ao voltar o foco/visibilidade, dispara um tick imediato (útil após minimizar).
+  // Auto-captura o caminho da área de transferência ao focar a aba ou alternar janelas
+  window.addEventListener('focus', () => {
+    if (isNotebookLM()) {
+      void autoCaptureClipboardPath();
+    }
+  });
+
+  window.addEventListener('pointerdown', () => {
+    if (isNotebookLM() && !state.nlmSourcesPath) {
+      void autoCaptureClipboardPath();
+    }
+  }, { once: true });
+
+  // Observador de mudança de rota SPA no NotebookLM
+  lastObservedUrl = window.location.href;
+  function checkUrlChange() {
+    if (window.location.href !== lastObservedUrl) {
+      lastObservedUrl = window.location.href;
+      dlog('checkUrlChange: URL alterada para:', lastObservedUrl);
+      if (isNotebookLM()) {
+        void autoCaptureClipboardPath();
+      }
+    }
+  }
+
+  try {
+    const origPushState = history.pushState;
+    history.pushState = function () {
+      const res = origPushState.apply(this, arguments);
+      checkUrlChange();
+      return res;
+    };
+    const origReplaceState = history.replaceState;
+    history.replaceState = function () {
+      const res = origReplaceState.apply(this, arguments);
+      checkUrlChange();
+      return res;
+    };
+    window.addEventListener('popstate', checkUrlChange);
+  } catch (_) {}
+
+  // Ao voltar o foco/visibilidade, dispara um tick imediato e tenta auto-captura
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
+    if (isNotebookLM()) {
+      void autoCaptureClipboardPath();
+    }
     if (!state.armed && !state.deletingNotebooks) return;
     dlog('visibility: aba visível de novo — tick imediato');
     if (!armedPort) connectArmedKeepalive();
@@ -5324,6 +5555,9 @@
     buildUi();
     scanForClassInfo();
     setInterval(runHeartbeat, POLL_MS);
+    if (isNotebookLM()) {
+      void autoCaptureClipboardPath();
+    }
     console.log(`[CCA] Chat Continue Auto v${extVersion} carregado e ativo.`);
   });
 })();

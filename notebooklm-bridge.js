@@ -7,29 +7,74 @@
   window.__CCA_NLM_BRIDGE_LOADED__ = true;
   console.log('[CCA-Bridge] Main World Bridge ativo no NotebookLM.');
 
+  try {
+    if (!document.getElementById('cca-bridge-styles')) {
+      const style = document.createElement('style');
+      style.id = 'cca-bridge-styles';
+      style.textContent = `
+        .cca-nlm-highlighted-btn {
+          animation: cca-nlm-pulse 1.2s infinite alternate !important;
+          outline: 3px solid #22c55e !important;
+          outline-offset: 3px !important;
+          box-shadow: 0 0 20px rgba(34, 197, 94, 0.85) !important;
+          cursor: pointer !important;
+        }
+        @keyframes cca-nlm-pulse {
+          from {
+            outline: 3px solid #22c55e !important;
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.6) !important;
+          }
+          to {
+            outline: 4px solid #4ade80 !important;
+            box-shadow: 0 0 25px rgba(74, 222, 128, 0.95) !important;
+          }
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    }
+  } catch (_) {}
+
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ─── Interceptadores Globais Armados no MAIN World ──────────────
   let __armedFiles = null;
   let __armedTimer = null;
+  let __highlightWatcherTimer = null;
+  let __highlightObserver = null;
+
+  function stopHighlightWatcher() {
+    if (__highlightWatcherTimer) {
+      clearInterval(__highlightWatcherTimer);
+      __highlightWatcherTimer = null;
+    }
+    if (__highlightObserver) {
+      __highlightObserver.disconnect();
+      __highlightObserver = null;
+    }
+  }
+
+  function clearHighlights() {
+    try {
+      document.querySelectorAll('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn').forEach((el) => {
+        if (el.closest('#cca-root') || el.id?.startsWith('cca-')) return;
+        el.classList.remove('cca-nlm-modal-upload-highlighted', 'cca-nlm-highlighted-btn');
+        el.style.removeProperty('outline');
+        el.style.removeProperty('outline-offset');
+        el.style.removeProperty('box-shadow');
+        el.style.removeProperty('animation');
+      });
+    } catch (_) {}
+  }
 
   function armInterceptor(webFiles) {
     __armedFiles = webFiles;
     clearTimeout(__armedTimer);
     __armedTimer = setTimeout(() => {
       __armedFiles = null;
+      stopHighlightWatcher();
+      clearHighlights();
       console.log('[CCA-Bridge] Interceptador de arquivos desarmado por timeout.');
-    }, 45000);
-
-    function clearHighlights() {
-      try {
-        document.querySelectorAll('.cca-nlm-highlighted-btn').forEach((el) => {
-          el.classList.remove('cca-nlm-highlighted-btn');
-          el.style.outline = '';
-          el.style.boxShadow = '';
-        });
-      } catch (_) {}
-    }
+    }, 60000);
 
     if (!window.__ccaInputClickHooked) {
       window.__ccaInputClickHooked = true;
@@ -37,9 +82,10 @@
       HTMLInputElement.prototype.click = function () {
         if (this.type === 'file' && __armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].click() interceptado!', this);
-          clearHighlights();
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          stopHighlightWatcher();
+          clearHighlights();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -64,9 +110,10 @@
       HTMLInputElement.prototype.showPicker = function () {
         if (this.type === 'file' && __armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].showPicker() interceptado!', this);
-          clearHighlights();
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          stopHighlightWatcher();
+          clearHighlights();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -91,9 +138,10 @@
       window.showOpenFilePicker = async function (opts) {
         if (__armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: window.showOpenFilePicker() interceptado!', opts);
-          clearHighlights();
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          stopHighlightWatcher();
+          clearHighlights();
           window.postMessage(
             {
               type: 'CCA_NLM_UPLOAD_CONFIRMED',
@@ -160,6 +208,12 @@
         );
       }
     }
+
+    if (action === 'highlight_modal_button') {
+      const highlighted = ensureModalButtonHighlighted();
+      window.postMessage({ type: 'CCA_NLM_BRIDGE_RES', reqId, ok: true, highlighted }, '*');
+      return;
+    }
   });
 
   // ─── Disparo de Cliques Fidedigno aos Componentes do Google ─────
@@ -214,8 +268,9 @@
     );
     return (
       dialogs.find((d) => {
+        if (d.closest('#cca-root') || d.id?.startsWith('cca-')) return false;
         if (d.offsetParent === null && d.offsetWidth === 0 && d.offsetHeight === 0) return false;
-        const txt = (d.textContent || '').toLowerCase();
+        const txt = (d.textContent || '').replace(/\s+/g, ' ').toLowerCase();
         return (
           txt.includes('solte seus arquivos') ||
           txt.includes('drop your files') ||
@@ -231,83 +286,109 @@
   }
 
   function findAddSourceButton() {
-    const buttons = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, div[tabindex="0"]'));
     return (
       buttons.find((b) => {
-        if (b.offsetParent === null && b.offsetWidth === 0) return false;
-        const text = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
+        if (b.closest('#cca-root') || b.id?.startsWith('cca-')) return false;
+        if (b.offsetParent === null && b.offsetWidth === 0 && b.offsetHeight === 0) return false;
+        const t = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const a = (b.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const title = (b.getAttribute('title') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const combined = `${t} ${a} ${title}`.trim();
         return (
-          text.includes('adicionar fonte') ||
-          text.includes('adicionar fontes') ||
-          text.includes('add source') ||
-          text.includes('add sources') ||
-          text.includes('nova fonte') ||
-          text.includes('new source')
+          combined.includes('adicionar fonte') ||
+          combined.includes('adicionar fontes') ||
+          combined.includes('add source') ||
+          combined.includes('add sources') ||
+          combined.includes('nova fonte') ||
+          combined.includes('new source')
         );
-      }) || document.querySelector('button[aria-label*="fonte" i], button[aria-label*="source" i]')
+      }) ||
+      document.querySelector('button[aria-label*="fonte" i], button[aria-label*="source" i]')
     );
   }
 
   function findUploadButton(dialog) {
-    const root = dialog || document;
+    function searchContainer(root) {
+      if (!root) return null;
+      const excludeTerms = ['drive', 'google drive', 'sites', 'website', 'livros', 'copiado', 'copied', 'pesquisa no google', 'youtube'];
+      const isExcluded = (str) => excludeTerms.some((term) => str.includes(term));
 
-    const excludeTerms = ['drive', 'google drive', 'sites', 'website', 'livros', 'copiado', 'copied', 'pesquisa no google', 'youtube'];
-    const isExcluded = (str) => excludeTerms.some((term) => str.includes(term));
+      // 1. Busca em botões e elementos interativos
+      const candidates = Array.from(
+        root.querySelectorAll('button, [role="button"], a.mat-button, label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button')
+      );
+      for (const el of candidates) {
+        if (el.closest('#cca-root') || el.id?.startsWith('cca-')) continue;
+        if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const a = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const title = (el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const combined = `${t} ${a} ${title}`.trim();
 
-    // 1. Busca em botões e elementos com role="button" ou cards clicáveis
-    const candidates = Array.from(
-      root.querySelectorAll('button, [role="button"], a.mat-button, label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button')
-    );
-    for (const el of candidates) {
-      if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
-      const t = (el.textContent || '').trim().toLowerCase();
-      const a = (el.getAttribute('aria-label') || '').trim().toLowerCase();
-      const combined = t + ' ' + a;
+        if (isExcluded(combined)) continue;
 
-      if (isExcluded(combined)) continue;
-
-      if (
-        combined.includes('enviar arquivo') ||
-        combined.includes('enviar arquivos') ||
-        combined.includes('upload file') ||
-        combined.includes('upload files') ||
-        combined.includes('fazer upload') ||
-        combined.includes('upload de arquivo') ||
-        combined.includes('upload de arquivos') ||
-        (combined.includes('upload') && !combined.includes('drive'))
-      ) {
-        return el;
+        if (
+          combined.includes('enviar arquivo') ||
+          combined.includes('enviar arquivos') ||
+          combined.includes('upload file') ||
+          combined.includes('upload files') ||
+          combined.includes('fazer upload') ||
+          combined.includes('upload de arquivo') ||
+          combined.includes('upload de arquivos') ||
+          combined.includes('subir archivo') ||
+          combined.includes('subir arquivos') ||
+          (combined.includes('upload') && !combined.includes('drive'))
+        ) {
+          return el;
+        }
       }
+
+      // 2. Busca por texto interno em spans, divs, rótulos ou ícones
+      const labels = Array.from(
+        root.querySelectorAll('.mdc-button__label, span, div, p, label, mat-icon, [class*="label"], [class*="title"]')
+      );
+      for (const s of labels) {
+        if (s.closest('#cca-root') || s.id?.startsWith('cca-')) continue;
+        if (s.offsetParent === null && s.offsetWidth === 0 && s.offsetHeight === 0) continue;
+        const t = (s.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (isExcluded(t)) continue;
+
+        if (
+          t === 'enviar arquivos' ||
+          t === 'enviar arquivo' ||
+          t === 'fazer upload' ||
+          t === 'fazer upload de arquivos' ||
+          t === 'upload de arquivos' ||
+          t === 'upload de arquivo' ||
+          t === 'upload files' ||
+          t === 'upload file' ||
+          t === 'upload' ||
+          t === 'subir arquivos' ||
+          t === 'subir archivo' ||
+          t.includes('fazer upload') ||
+          t.includes('enviar arquivo') ||
+          t.includes('upload file') ||
+          t.includes('upload de arquivo') ||
+          t.includes('subir archivo')
+        ) {
+          const clickable =
+            s.closest('button, [role="button"], label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button') ||
+            s.parentElement ||
+            s;
+          if (clickable && !clickable.closest('#cca-root')) {
+            return clickable;
+          }
+        }
+      }
+      return null;
     }
 
-    // 2. Busca por texto interno em spans, divs, rótulos ou ícones
-    const labels = Array.from(root.querySelectorAll('.mdc-button__label, span, div, p, label, mat-icon'));
-    for (const s of labels) {
-      if (s.offsetParent === null && s.offsetWidth === 0 && s.offsetHeight === 0) continue;
-      const t = (s.textContent || '').trim().toLowerCase();
-      if (isExcluded(t)) continue;
-
-      if (
-        t === 'enviar arquivos' ||
-        t === 'enviar arquivo' ||
-        t === 'fazer upload' ||
-        t === 'fazer upload de arquivos' ||
-        t === 'upload de arquivos' ||
-        t === 'upload de arquivo' ||
-        t === 'upload files' ||
-        t === 'upload file' ||
-        t === 'upload' ||
-        t.includes('fazer upload') ||
-        t.includes('enviar arquivo') ||
-        t.includes('upload file') ||
-        t.includes('upload de arquivo')
-      ) {
-        const clickable = s.closest('button, [role="button"], label, div[tabindex="0"], mat-card, .mat-mdc-button, .mdc-button') || s.parentElement || s;
-        return clickable;
-      }
+    if (dialog) {
+      const found = searchContainer(dialog);
+      if (found) return found;
     }
-
-    return null;
+    return searchContainer(document);
   }
 
   function findCopiedTextButton(dialog) {
@@ -456,10 +537,112 @@
     return bytes.buffer;
   }
 
-  // ─── Execução do Envio como ARQUIVOS ("Enviar arquivos") ─────────
+  // ─── Destaque Contínuo e Injeção do Botão "Enviar arquivos" ─────
+
+  function ensureModalButtonHighlighted() {
+    if (!__armedFiles || __armedFiles.length === 0) return false;
+    const dialog = getOpenDialog();
+    let uploadBtn = findUploadButton(dialog) || findUploadButton(document);
+    if (!uploadBtn) return false;
+
+    if (uploadBtn.tagName.toLowerCase() !== 'button' && uploadBtn.tagName.toLowerCase() !== 'label') {
+      uploadBtn = uploadBtn.closest('button, [role="button"], label, .mdc-button') || uploadBtn;
+    }
+
+    if (!uploadBtn.classList.contains('cca-nlm-modal-upload-highlighted')) {
+      console.log('[CCA-Bridge] Destacando botão "Enviar arquivos" no modal do NotebookLM:', uploadBtn);
+      uploadBtn.classList.add('cca-nlm-modal-upload-highlighted', 'cca-nlm-highlighted-btn');
+      uploadBtn.style.setProperty('outline', '3px solid #22c55e', 'important');
+      uploadBtn.style.setProperty('outline-offset', '3px', 'important');
+      uploadBtn.style.setProperty('box-shadow', '0 0 24px rgba(34, 197, 94, 0.9)', 'important');
+      uploadBtn.style.setProperty('animation', 'cca-nlm-pulse 1.2s infinite alternate', 'important');
+      uploadBtn.style.setProperty('cursor', 'pointer', 'important');
+      uploadBtn.style.setProperty('border-radius', '9999px', 'important');
+      try {
+        uploadBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (_) {}
+    }
+
+    if (!uploadBtn.__ccaClickAttached) {
+      uploadBtn.__ccaClickAttached = true;
+      uploadBtn.addEventListener(
+        'click',
+        () => {
+          console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" destacado!');
+          setTimeout(() => {
+            if (__armedFiles && __armedFiles.length > 0) {
+              const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
+              if (fileInput) {
+                console.log('[CCA-Bridge] Injetando arquivos diretamente no fileInput:', fileInput);
+                const filesToInject = __armedFiles;
+                __armedFiles = null;
+                stopHighlightWatcher();
+                clearHighlights();
+                setFilesOnInput(fileInput, filesToInject);
+                window.postMessage(
+                  {
+                    type: 'CCA_NLM_UPLOAD_CONFIRMED',
+                    count: filesToInject.length,
+                    fileNames: filesToInject.map((f) => f.name)
+                  },
+                  '*'
+                );
+              }
+            }
+          }, 35);
+        },
+        { once: true }
+      );
+    }
+
+    return true;
+  }
+
+  function startHighlightWatcher() {
+    stopHighlightWatcher();
+    ensureModalButtonHighlighted();
+
+    // 1. Se modal ainda não estiver aberto, tenta abrir
+    let dialog = getOpenDialog();
+    if (!dialog) {
+      const addBtn = findAddSourceButton();
+      if (addBtn) {
+        console.log('[CCA-Bridge] Modal de fontes não aberto. Clicando em "Adicionar fontes"...');
+        triggerClick(addBtn);
+      }
+    }
+
+    // 2. Intervalo de monitoramento rápido para capturar renderização do Angular
+    let elapsed = 0;
+    __highlightWatcherTimer = setInterval(() => {
+      elapsed += 250;
+      if (!__armedFiles || elapsed > 60000) {
+        stopHighlightWatcher();
+        return;
+      }
+      ensureModalButtonHighlighted();
+      if (!getOpenDialog() && elapsed < 4000) {
+        const addBtn = findAddSourceButton();
+        if (addBtn) triggerClick(addBtn);
+      }
+    }, 250);
+
+    // 3. MutationObserver para reagir instantaneamente quando o Angular injetar o modal no DOM
+    try {
+      __highlightObserver = new MutationObserver(() => {
+        if (__armedFiles && __armedFiles.length > 0) {
+          ensureModalButtonHighlighted();
+        }
+      });
+      __highlightObserver.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    } catch (_) {}
+  }
 
   async function handleUploadFiles(payload) {
-    const rawFiles = payload.files || [];
+    const rawFiles = payload?.files || [];
     if (!rawFiles.length) {
       return { ok: false, error: 'Nenhum arquivo recebido para envio.' };
     }
@@ -482,118 +665,25 @@
       }
 
       const mime = f.type || (f.name.endsWith('.md') ? 'text/markdown' : 'text/plain');
-      const realFile = new File([content], f.name, {
+      return new File([content], f.name, {
         type: mime,
         lastModified: f.lastModified || Date.now()
       });
-      console.log(`[CCA-Bridge] Preparado File "${realFile.name}" (${realFile.size} bytes, type: "${realFile.type}")`);
-      return realFile;
     });
 
     console.log(
-      '[CCA-Bridge] Iniciando envio via "Enviar arquivos" com',
+      '[CCA-Bridge] Armado interceptador com',
       webFiles.length,
       'arquivo(s):',
-      webFiles.map((f) => `${f.name} (${f.size}b)`)
+      webFiles.map((f) => f.name)
     );
 
     // 1. Arma o interceptador global no MAIN world
     armInterceptor(webFiles);
 
-    // 2. Garante que o modal de fontes está aberto
-    let dialog = getOpenDialog();
-    if (!dialog) {
-      const addBtn = findAddSourceButton();
-      if (addBtn) {
-        console.log('[CCA-Bridge] Abrindo modal "Adicionar fontes"...');
-        triggerClick(addBtn);
-        for (let i = 0; i < 15; i++) {
-          await sleep(100);
-          dialog = getOpenDialog();
-          if (dialog) break;
-        }
-      }
-    }
+    // 2. Inicia o watcher contínuo que busca o botão e o destaca no modal do NotebookLM
+    startHighlightWatcher();
 
-    if (!dialog) {
-      throw new Error('Não foi possível abrir o modal de fontes do NotebookLM.');
-    }
-
-    // 3. Se já existir um input[type="file"] no DOM, injeta diretamente nele
-    const existingInput = findAnyFileInput(dialog) || findAnyFileInput(document);
-    if (existingInput) {
-      console.log('[CCA-Bridge] input[type="file"] pré-existente encontrado. Injetando...', existingInput);
-      setFilesOnInput(existingInput, webFiles);
-      await sleep(1000);
-      if (isUploadActive(dialog) || !dialog.isConnected) {
-        return {
-          ok: true,
-          method: 'file_input',
-          count: webFiles.length,
-          fileNames: webFiles.map((f) => f.name)
-        };
-      }
-    }
-
-    // 4. Localiza o elemento real do botão "Enviar arquivos" (garantindo que seja o <button> e não o <span> interno)
-    let uploadBtn = findUploadButton(dialog);
-    if (uploadBtn && uploadBtn.tagName.toLowerCase() !== 'button' && uploadBtn.tagName.toLowerCase() !== 'label') {
-      uploadBtn = uploadBtn.closest('button, [role="button"], label') || uploadBtn;
-    }
-    console.log('[CCA-Bridge] Botão "Enviar arquivos" real identificado:', uploadBtn?.tagName, uploadBtn?.className, uploadBtn);
-
-    if (uploadBtn) {
-      console.log('[CCA-Bridge] Acionando clique programático em "Enviar arquivos"...');
-      triggerClick(uploadBtn);
-
-      // Aguarda até 1s para o clique chamar o hook
-      for (let w = 0; w < 10; w++) {
-        if (!__armedFiles) {
-          // __armedFiles vira null assim que o interceptador é acionado!
-          console.log('[CCA-Bridge] Interceptador consumido com sucesso via clique programático!');
-          await sleep(1000);
-          return {
-            ok: true,
-            method: 'file_input',
-            count: webFiles.length,
-            fileNames: webFiles.map((f) => f.name)
-          };
-        }
-        await sleep(100);
-      }
-    }
-
-    // 5. Tenta simular Drag & Drop na caixa tracejada
-    console.log('[CCA-Bridge] Tentando simulação de Drag & Drop na caixa tracejada...');
-    const dropZone = findDropZone(dialog) || dialog;
-    if (dropZone) {
-      simulateFullDragDrop(dropZone, webFiles);
-      await sleep(1200);
-      if (isUploadActive(dialog) || !dialog.isConnected) {
-        console.log('[CCA-Bridge] Upload via Drag & Drop iniciado com sucesso!');
-        return {
-          ok: true,
-          method: 'drag_and_drop',
-          count: webFiles.length,
-          fileNames: webFiles.map((f) => f.name)
-        };
-      }
-    }
-
-    // 6. Se o clique programático foi bloqueado por segurança do Chromium (isTrusted check):
-    // Mantemos o interceptador armado! Destacamos o botão na tela para o usuário dar 1 clique.
-    if (uploadBtn) {
-      try {
-        uploadBtn.classList.add('cca-nlm-highlighted-btn');
-        uploadBtn.style.transition = 'all 0.3s ease';
-        uploadBtn.style.outline = '3px solid #22c55e';
-        uploadBtn.style.outlineOffset = '4px';
-        uploadBtn.style.boxShadow = '0 0 20px rgba(34, 197, 94, 0.85)';
-        uploadBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } catch (_) {}
-    }
-
-    console.log('[CCA-Bridge] Interceptador permanece armado para clique manual. Botão destacado:', uploadBtn);
     return {
       ok: true,
       waitingManualClick: true,
