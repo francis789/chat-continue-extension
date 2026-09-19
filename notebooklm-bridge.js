@@ -595,24 +595,48 @@
       );
     }
 
+    // Hook de fechamento do modal pelo usuário (botão X)
+    if (dialog && !dialog.__ccaCloseHooked) {
+      dialog.__ccaCloseHooked = true;
+      const closeButtons = dialog.querySelectorAll(
+        'button[aria-label*="close" i], button[aria-label*="fechar" i], button.close, [mat-dialog-close]'
+      );
+      closeButtons.forEach((cb) => {
+        cb.addEventListener(
+          'click',
+          () => {
+            console.log('[CCA-Bridge] Modal fechado pelo usuário via botão Fechar (X).');
+            __armedFiles = null;
+            stopHighlightWatcher();
+            clearHighlights();
+            window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+          },
+          { once: true }
+        );
+      });
+    }
+
     return true;
+  }
+
+  if (!window.__ccaEscapeHooked) {
+    window.__ccaEscapeHooked = true;
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && __armedFiles) {
+        console.log('[CCA-Bridge] Modal fechado pelo usuário via tecla Escape.');
+        __armedFiles = null;
+        stopHighlightWatcher();
+        clearHighlights();
+        window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+      }
+    });
   }
 
   function startHighlightWatcher() {
     stopHighlightWatcher();
     ensureModalButtonHighlighted();
 
-    // 1. Se modal ainda não estiver aberto, tenta abrir
-    let dialog = getOpenDialog();
-    if (!dialog) {
-      const addBtn = findAddSourceButton();
-      if (addBtn) {
-        console.log('[CCA-Bridge] Modal de fontes não aberto. Clicando em "Adicionar fontes"...');
-        triggerClick(addBtn);
-      }
-    }
-
-    // 2. Intervalo de monitoramento rápido para capturar renderização do Angular
+    // 1. Intervalo de monitoramento rápido para capturar renderização do Angular sem forçar abertura de modal
     let elapsed = 0;
     __highlightWatcherTimer = setInterval(() => {
       elapsed += 250;
@@ -621,13 +645,9 @@
         return;
       }
       ensureModalButtonHighlighted();
-      if (!getOpenDialog() && elapsed < 4000) {
-        const addBtn = findAddSourceButton();
-        if (addBtn) triggerClick(addBtn);
-      }
     }, 250);
 
-    // 3. MutationObserver para reagir instantaneamente quando o Angular injetar o modal no DOM
+    // 2. MutationObserver para reagir instantaneamente quando o modal for inserido no DOM
     try {
       __highlightObserver = new MutationObserver(() => {
         if (__armedFiles && __armedFiles.length > 0) {

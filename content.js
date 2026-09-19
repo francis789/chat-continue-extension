@@ -2044,10 +2044,10 @@
         lastObservedUrl = location.href;
         dlog('runHeartbeat: URL alterada no NotebookLM para:', lastObservedUrl);
         void autoCaptureClipboardPath();
-      } else if (isNotebookLMNotebookPage() && state.nlmSourcesPath) {
+      } else if (isNotebookLMNotebookPage() && state.nlmSourcesPath && !userDismissedModal && lastUploadedPath !== state.nlmSourcesPath) {
         const dialog = document.querySelector('[role="dialog"], mat-dialog-container, .cdk-overlay-pane, div[aria-modal="true"]');
         if (dialog && !isNotebookLMModalButtonHighlighted()) {
-          void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
         }
       }
     }
@@ -3446,7 +3446,11 @@
       if (addonBtn) {
         addonBtn.title = `Enviar arquivos da pasta "${targetPath}" ao NotebookLM`;
       }
-      setStatus(`Pasta detectada: <strong>${targetPath}</strong>. Clique em <strong>"Enviar Arquivos"</strong> para adicionar.`);
+      setStatus(
+        `Pasta detectada:<br>` +
+        `<strong style="word-break: break-all; color: #58a6ff;">${targetPath}</strong><br>` +
+        `Clique em <strong>"Enviar Arquivos"</strong> para adicionar.`
+      );
     } else {
       pasteBtn?.classList.remove('cca-btn-highlighted');
       addonBtn?.classList.remove('cca-btn-highlighted');
@@ -3474,10 +3478,14 @@
 
   let isAutoArming = false;
   let lastAutoArmedPath = '';
+  let lastUploadedPath = '';
+  let userDismissedModal = false;
 
   async function autoArmAndHighlightModalUpload(targetPath, force = false) {
     if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
     if (isAutoArming) return;
+    // Se o modal foi fechado pelo usuário ou a pasta já foi enviada, não re-abre nem re-arma sozinho
+    if (!force && (lastUploadedPath === targetPath || userDismissedModal)) return;
     // Evita chamadas repetidas desnecessárias se o botão do modal já estiver destacado
     if (!force && lastAutoArmedPath === targetPath && isNotebookLMModalButtonHighlighted()) return;
 
@@ -3494,7 +3502,7 @@
           if (res?.error === 'no_handle') {
             setStatus('Clique em "Conectar pasta" para selecionar a pasta raiz dos arquivos.');
           } else {
-            setStatus(`Pasta "${targetPath}": ${errMsg}`);
+            setStatus(`Pasta "${targetPath}":<br>${errMsg}`);
           }
           return;
         }
@@ -3532,7 +3540,7 @@
       if (!clean) {
         if (state.nlmSourcesPath) {
           highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage()) {
+          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3543,7 +3551,7 @@
       if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
         if (state.nlmSourcesPath) {
           highlightSendButton(true, state.nlmSourcesPath);
-          if (isNotebookLMNotebookPage()) {
+          if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
           }
         }
@@ -3554,20 +3562,25 @@
       if (inputEl && inputEl.value !== clean) {
         inputEl.value = clean;
       }
+      const isNewPath = state.nlmSourcesPath !== clean;
+      if (isNewPath) {
+        lastUploadedPath = '';
+        userDismissedModal = false;
+      }
       state.nlmSourcesPath = clean;
       persistUiFields();
       highlightSendButton(true, clean);
       dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
 
       // Inicia imediatamente a preparação das fontes e o destaque do botão no modal do NotebookLM!
-      if (isNotebookLMNotebookPage()) {
-        void autoArmAndHighlightModalUpload(clean, true);
+      if (isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal) {
+        void autoArmAndHighlightModalUpload(clean, isNewPath);
       }
     } catch (e) {
       dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
       if (state.nlmSourcesPath && isNotebookLM()) {
         highlightSendButton(true, state.nlmSourcesPath);
-        if (isNotebookLMNotebookPage()) {
+        if (isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
         }
       }
@@ -3616,6 +3629,8 @@
   }
 
   async function executeAddSources(targetPath, mode = 'file') {
+    userDismissedModal = false;
+    lastUploadedPath = '';
     highlightSendButton(false);
     if (!isNotebookLM()) {
       setStatus('Esta opção só funciona no NotebookLM.');
@@ -3676,8 +3691,17 @@
   // Listener para confirmação de upload pelo interceptador armado do Main World
   window.addEventListener('message', (ev) => {
     if (ev.data?.type === 'CCA_NLM_UPLOAD_CONFIRMED') {
+      lastUploadedPath = state.nlmSourcesPath || '';
+      userDismissedModal = true;
+      highlightSendButton(false);
       const names = (ev.data.fileNames || []).slice(0, 3).join(', ') + ((ev.data.fileNames?.length || 0) > 3 ? '…' : '');
-      setStatus(`✓ <strong>${ev.data.count}</strong> fonte(s) enviada(s) ao NotebookLM (upload de arquivos) [${names}]!`);
+      setStatus(`✓ <strong>${ev.data.count}</strong> fonte(s) enviada(s) ao NotebookLM (upload de arquivos)!<br>[${names}]`);
+    }
+
+    if (ev.data?.type === 'CCA_NLM_MODAL_CLOSED_BY_USER') {
+      userDismissedModal = true;
+      highlightSendButton(false);
+      setStatus('Modal de fontes fechado. Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.');
     }
   });
 
