@@ -1398,3 +1398,194 @@ html[data-cca-invert="1"] #cca-root[data-invert="1"] {
   }
 }
 
+/* ==========================================================================
+   BARRA DE INFORMAÇÕES DO LOTE E CANCELAMENTO MOMENTÂNEO NO NOTEBOOKLM
+   ========================================================================== */
+.cca-nlm-batch-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  margin-bottom: 6px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1.5px solid rgba(34, 197, 94, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  width: fit-content;
+  max-width: 95%;
+  margin-left: auto;
+  margin-right: auto;
+  align-self: center;
+  font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, sans-serif;
+  box-sizing: border-box;
+  animation: cca-batch-bar-fadein 0.25s ease-out;
+  z-index: 10;
+  overflow: visible;
+}
+
+@keyframes cca-batch-bar-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.cca-nlm-batch-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.cca-nlm-batch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: inherit;
+}
+
+.cca-nlm-batch-code {
+  display: inline-block;
+  background: rgba(34, 197, 94, 0.18);
+  color: #15803d;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.cca-nlm-batch-count {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.cca-nlm-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #f87171;
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+  transition: all 0.2s ease;
+  position: relative;
+  user-select: none;
+  outline: none;
+}
+
+.cca-nlm-cancel-btn:hover {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #dc2626;
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.45);
+}
+
+.cca-nlm-cancel-btn:active {
+  transform: scale(0.97);
+}
+
+.cca-nlm-cancel-btn .cca-nlm-tooltip-bubble {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 11.5px;
+  font-weight: normal;
+  padding: 7px 12px;
+  border-radius: 6px;
+  white-space: normal;
+  width: 260px;
+  text-align: center;
+  line-height: 1.4;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  z-index: 99999;
+}
+
+.cca-nlm-cancel-btn:hover .cca-nlm-tooltip-bubble {
+  visibility: visible;
+  opacity: 1;
+}
+
+.cca-nlm-cancel-btn .cca-nlm-tooltip-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 5px;
+  border-style: solid;
+  border-color: #1e293b transparent transparent transparent;
+}
+
+.cca-nlm-reactivate-btn {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.cca-nlm-reactivate-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.45);
+}
+
+.cca-nlm-manual-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  padding: 6px 12px;
+  margin-top: 4px;
+}
+
+.cca-nlm-badge-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cca-nlm-pill-warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cca-nlm-batch-code {
+    background: rgba(34, 197, 94, 0.25);
+    color: #4ade80;
+  }
+  .cca-nlm-manual-hint {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(245, 158, 11, 0.4);
+  }
+  .cca-nlm-pill-warn {
+    background: rgba(245, 158, 11, 0.3);
+    color: #fcd34d;
+  }
+}
+
+

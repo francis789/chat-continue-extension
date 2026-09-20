@@ -29,6 +29,160 @@
             box-shadow: 0 0 25px rgba(74, 222, 128, 0.95) !important;
           }
         }
+        .cca-nlm-batch-bar {
+          display: flex !important;
+          flex-direction: column !important;
+          align-items: center !important;
+          justify-content: center !important;
+          gap: 8px !important;
+          margin-top: 12px !important;
+          margin-bottom: 6px !important;
+          padding: 8px 16px !important;
+          border-radius: 12px !important;
+          background: rgba(34, 197, 94, 0.08) !important;
+          border: 1.5px solid rgba(34, 197, 94, 0.45) !important;
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08) !important;
+          width: fit-content !important;
+          max-width: 95% !important;
+          margin-left: auto !important;
+          margin-right: auto !important;
+          align-self: center !important;
+          font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, sans-serif !important;
+          box-sizing: border-box !important;
+          animation: cca-batch-bar-fadein 0.25s ease-out !important;
+          z-index: 10 !important;
+          overflow: visible !important;
+        }
+        @keyframes cca-batch-bar-fadein {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .cca-nlm-batch-header {
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          gap: 12px !important;
+          flex-wrap: wrap !important;
+          overflow: visible !important;
+        }
+        .cca-nlm-batch-badge {
+          display: inline-flex !important;
+          align-items: center !important;
+          gap: 6px !important;
+          font-size: 13px !important;
+          font-weight: 500 !important;
+          color: inherit !important;
+        }
+        .cca-nlm-batch-code {
+          display: inline-block !important;
+          background: rgba(34, 197, 94, 0.18) !important;
+          color: #15803d !important;
+          padding: 2px 8px !important;
+          border-radius: 6px !important;
+          font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace !important;
+          font-weight: 700 !important;
+          font-size: 13px !important;
+          letter-spacing: 0.5px !important;
+        }
+        .cca-nlm-batch-count {
+          font-size: 12px !important;
+          opacity: 0.85 !important;
+        }
+        .cca-nlm-cancel-btn {
+          display: inline-flex !important;
+          align-items: center !important;
+          gap: 6px !important;
+          padding: 6px 14px !important;
+          border-radius: 9999px !important;
+          font-size: 12px !important;
+          font-weight: 600 !important;
+          cursor: pointer !important;
+          border: 1px solid #f87171 !important;
+          background: rgba(239, 68, 68, 0.12) !important;
+          color: #dc2626 !important;
+          transition: all 0.2s ease !important;
+          position: relative !important;
+          user-select: none !important;
+          outline: none !important;
+        }
+        .cca-nlm-cancel-btn:hover {
+          background: #dc2626 !important;
+          color: #ffffff !important;
+          border-color: #dc2626 !important;
+          box-shadow: 0 0 12px rgba(220, 38, 38, 0.45) !important;
+        }
+        .cca-nlm-cancel-btn:active {
+          transform: scale(0.97) !important;
+        }
+        .cca-nlm-cancel-btn .cca-nlm-tooltip-bubble {
+          visibility: hidden !important;
+          opacity: 0 !important;
+          position: absolute !important;
+          bottom: calc(100% + 8px) !important;
+          left: 50% !important;
+          transform: translateX(-50%) !important;
+          background: #1e293b !important;
+          color: #ffffff !important;
+          font-size: 11.5px !important;
+          font-weight: normal !important;
+          padding: 7px 12px !important;
+          border-radius: 6px !important;
+          white-space: normal !important;
+          width: 260px !important;
+          text-align: center !important;
+          line-height: 1.4 !important;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
+          pointer-events: none !important;
+          transition: opacity 0.2s ease, visibility 0.2s ease !important;
+          z-index: 99999 !important;
+        }
+        .cca-nlm-cancel-btn:hover .cca-nlm-tooltip-bubble {
+          visibility: visible !important;
+          opacity: 1 !important;
+        }
+        .cca-nlm-cancel-btn .cca-nlm-tooltip-bubble::after {
+          content: '' !important;
+          position: absolute !important;
+          top: 100% !important;
+          left: 50% !important;
+          transform: translateX(-50%) !important;
+          border-width: 5px !important;
+          border-style: solid !important;
+          border-color: #1e293b transparent transparent transparent !important;
+        }
+        .cca-nlm-reactivate-btn {
+          border-color: #3b82f6 !important;
+          background: rgba(59, 130, 246, 0.12) !important;
+          color: #2563eb !important;
+        }
+        .cca-nlm-reactivate-btn:hover {
+          background: #2563eb !important;
+          color: #ffffff !important;
+          border-color: #2563eb !important;
+          box-shadow: 0 0 12px rgba(37, 99, 235, 0.45) !important;
+        }
+        .cca-nlm-manual-hint {
+          font-size: 12px !important;
+          line-height: 1.45 !important;
+          text-align: center !important;
+          color: #b45309 !important;
+          background: rgba(245, 158, 11, 0.12) !important;
+          border: 1px solid rgba(245, 158, 11, 0.35) !important;
+          border-radius: 8px !important;
+          padding: 6px 12px !important;
+          margin-top: 4px !important;
+        }
+        .cca-nlm-badge-pill {
+          display: inline-block !important;
+          padding: 2px 8px !important;
+          border-radius: 9999px !important;
+          font-size: 11px !important;
+          font-weight: 600 !important;
+        }
+        .cca-nlm-pill-warn {
+          background: rgba(245, 158, 11, 0.2) !important;
+          color: #d97706 !important;
+        }
       `;
       (document.head || document.documentElement).appendChild(style);
     }
@@ -36,11 +190,29 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  function escapeHtmlBridge(str) {
+    if (typeof str !== 'string') return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // ─── Interceptadores Globais Armados no MAIN World ──────────────
   let __armedFiles = null;
   let __armedTimer = null;
   let __highlightWatcherTimer = null;
   let __highlightObserver = null;
+  let __autoUploadCancelledMomentarily = false;
+  let __currentBatchInfo = {
+    batchCode: '',
+    folderName: '',
+    path: '',
+    count: 0,
+    isCancelled: false
+  };
 
   function stopHighlightWatcher() {
     if (__highlightWatcherTimer) {
@@ -55,8 +227,13 @@
 
   function clearHighlights() {
     try {
+      const dialog = getOpenDialog();
       document.querySelectorAll('.cca-nlm-modal-upload-highlighted, .cca-nlm-highlighted-btn').forEach((el) => {
         if (el.closest('#cca-root') || el.id?.startsWith('cca-')) return;
+        // SE o diálogo ainda estiver aberto na tela, NÃO remove o destaque do botão Enviar arquivos!
+        if (dialog && (dialog.contains(el) || el.closest('.cdk-overlay-pane, mat-dialog-container, [role="dialog"]'))) {
+          return;
+        }
         el.classList.remove('cca-nlm-modal-upload-highlighted', 'cca-nlm-highlighted-btn');
         el.style.removeProperty('outline');
         el.style.removeProperty('outline-offset');
@@ -66,26 +243,36 @@
     } catch (_) {}
   }
 
-  function armInterceptor(webFiles) {
+  function armInterceptor(webFiles, batchInfo = {}) {
     __armedFiles = webFiles;
+    __autoUploadCancelledMomentarily = false;
+    if (batchInfo) {
+      if (batchInfo.batchCode) __currentBatchInfo.batchCode = batchInfo.batchCode;
+      if (batchInfo.folderName) __currentBatchInfo.folderName = batchInfo.folderName;
+      if (batchInfo.path) __currentBatchInfo.path = batchInfo.path;
+      __currentBatchInfo.count = webFiles.length;
+      __currentBatchInfo.isCancelled = false;
+    }
+
     clearTimeout(__armedTimer);
     __armedTimer = setTimeout(() => {
       __armedFiles = null;
-      stopHighlightWatcher();
-      clearHighlights();
       console.log('[CCA-Bridge] Interceptador de arquivos desarmado por timeout.');
+      const dialog = getOpenDialog();
+      if (dialog) {
+        ensureModalButtonHighlighted();
+        renderOrUpdateBatchInfo(dialog);
+      }
     }, 60000);
 
     if (!window.__ccaInputClickHooked) {
       window.__ccaInputClickHooked = true;
       const origInputClick = HTMLInputElement.prototype.click;
       HTMLInputElement.prototype.click = function () {
-        if (this.type === 'file' && __armedFiles && __armedFiles.length > 0) {
+        if (this.type === 'file' && !__autoUploadCancelledMomentarily && __armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].click() interceptado!', this);
           const filesToInject = __armedFiles;
           __armedFiles = null;
-          stopHighlightWatcher();
-          clearHighlights();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -108,12 +295,10 @@
       window.__ccaInputShowPickerHooked = true;
       const origShowPicker = HTMLInputElement.prototype.showPicker;
       HTMLInputElement.prototype.showPicker = function () {
-        if (this.type === 'file' && __armedFiles && __armedFiles.length > 0) {
+        if (this.type === 'file' && !__autoUploadCancelledMomentarily && __armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].showPicker() interceptado!', this);
           const filesToInject = __armedFiles;
           __armedFiles = null;
-          stopHighlightWatcher();
-          clearHighlights();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -136,12 +321,10 @@
       window.__ccaPickerHooked = true;
       const origPicker = window.showOpenFilePicker;
       window.showOpenFilePicker = async function (opts) {
-        if (__armedFiles && __armedFiles.length > 0) {
+        if (!__autoUploadCancelledMomentarily && __armedFiles && __armedFiles.length > 0) {
           console.log('[CCA-Bridge] SUCESSO: window.showOpenFilePicker() interceptado!', opts);
           const filesToInject = __armedFiles;
           __armedFiles = null;
-          stopHighlightWatcher();
-          clearHighlights();
           window.postMessage(
             {
               type: 'CCA_NLM_UPLOAD_CONFIRMED',
@@ -212,6 +395,38 @@
     if (action === 'highlight_modal_button') {
       const highlighted = ensureModalButtonHighlighted();
       window.postMessage({ type: 'CCA_NLM_BRIDGE_RES', reqId, ok: true, highlighted }, '*');
+      return;
+    }
+
+    if (action === 'update_batch_info') {
+      if (payload) {
+        if (payload.batchCode !== undefined) __currentBatchInfo.batchCode = payload.batchCode;
+        if (payload.folderName !== undefined) __currentBatchInfo.folderName = payload.folderName;
+        if (payload.path !== undefined) __currentBatchInfo.path = payload.path;
+        if (payload.count !== undefined) __currentBatchInfo.count = payload.count;
+        if (payload.isCancelled !== undefined) {
+          __currentBatchInfo.isCancelled = Boolean(payload.isCancelled);
+          __autoUploadCancelledMomentarily = Boolean(payload.isCancelled);
+        }
+      }
+      const dialog = getOpenDialog();
+      if (dialog) {
+        ensureModalButtonHighlighted();
+      }
+      window.postMessage({ type: 'CCA_NLM_BRIDGE_RES', reqId, ok: true, batchInfo: __currentBatchInfo }, '*');
+      return;
+    }
+
+    if (action === 'cancel_batch') {
+      __armedFiles = null;
+      __autoUploadCancelledMomentarily = true;
+      __currentBatchInfo.isCancelled = true;
+      clearTimeout(__armedTimer);
+      const dialog = getOpenDialog();
+      if (dialog) {
+        ensureModalButtonHighlighted();
+      }
+      window.postMessage({ type: 'CCA_NLM_BRIDGE_RES', reqId, ok: true }, '*');
       return;
     }
   });
@@ -613,8 +828,174 @@
 
   // ─── Destaque Contínuo e Injeção do Botão "Enviar arquivos" ─────
 
+  function updateBarPosition(bar) {
+    if (!bar) return;
+    try {
+      bar.style.setProperty('margin-left', 'auto', 'important');
+      bar.style.setProperty('margin-right', 'auto', 'important');
+      bar.style.setProperty('align-self', 'center', 'important');
+    } catch (_) {}
+  }
+
+  function renderOrUpdateBatchInfo(dialog, uploadBtn) {
+    if (!dialog) return;
+    uploadBtn = uploadBtn || findUploadButton(dialog) || findUploadButton(document.querySelector('.cdk-overlay-container'));
+    if (!uploadBtn) return;
+
+    let buttonsRow = uploadBtn.closest('div[class*="row"], div[class*="button"], div[style*="display: flex"], div[style*="display:flex"]') || uploadBtn.parentElement;
+    if (!buttonsRow) return;
+
+    let bar = dialog.querySelector('#cca-nlm-batch-info-container');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'cca-nlm-batch-info-container';
+      bar.className = 'cca-nlm-batch-bar';
+      buttonsRow.insertAdjacentElement('afterend', bar);
+    }
+
+    const datasetBatch = (document.documentElement.dataset?.ccaNlmBatchCode || '').trim();
+    const rawBatchCode = (__currentBatchInfo.batchCode || __currentBatchInfo.folderName || datasetBatch || '').trim();
+    const count = __currentBatchInfo.count || (__armedFiles ? __armedFiles.length : 0);
+    const isCancelled = Boolean(
+      __autoUploadCancelledMomentarily ||
+      __currentBatchInfo.isCancelled ||
+      document.documentElement.dataset?.ccaNlmCancelled === '1'
+    );
+
+    updateBarPosition(bar, uploadBtn, buttonsRow);
+
+    const renderKey = `${rawBatchCode}__${count}__${isCancelled}`;
+    if (bar.dataset.renderKey === renderKey && bar.children.length > 0) {
+      return;
+    }
+    bar.dataset.renderKey = renderKey;
+
+    // Limpa conteúdo anterior de forma segura sem violar Trusted Types
+    while (bar.firstChild) {
+      bar.removeChild(bar.firstChild);
+    }
+
+    const header = document.createElement('div');
+    header.className = 'cca-nlm-batch-header';
+
+    // 1. Badge informativa do lote
+    const badge = document.createElement('div');
+    badge.className = 'cca-nlm-batch-badge';
+
+    const icon = document.createElement('span');
+    icon.className = 'cca-nlm-batch-icon';
+    icon.textContent = '📦';
+    badge.appendChild(icon);
+
+    const label = document.createElement('span');
+    label.className = 'cca-nlm-batch-label';
+    label.textContent = isCancelled ? 'Lote:' : 'Lote a enviar:';
+    badge.appendChild(label);
+
+    const code = document.createElement('strong');
+    code.className = 'cca-nlm-batch-code';
+    code.textContent = rawBatchCode || 'Nenhum lote detectado';
+    badge.appendChild(code);
+
+    if (isCancelled) {
+      const pill = document.createElement('span');
+      pill.className = 'cca-nlm-badge-pill cca-nlm-pill-warn';
+      pill.textContent = 'Envio automático suspenso';
+      badge.appendChild(pill);
+    } else if (rawBatchCode || (__armedFiles && __armedFiles.length > 0)) {
+      const countEl = document.createElement('span');
+      countEl.className = 'cca-nlm-batch-count';
+      countEl.textContent = count > 0 ? `(${count} arquivo${count > 1 ? 's' : ''})` : '(arquivos prontos)';
+      badge.appendChild(countEl);
+    } else {
+      const countEl = document.createElement('span');
+      countEl.className = 'cca-nlm-batch-count';
+      countEl.textContent = '(copie a pasta do lote)';
+      badge.appendChild(countEl);
+    }
+
+    header.appendChild(badge);
+
+    // 2. Botão de cancelamento / reativação com tooltip explicativa
+    const tooltipText = isCancelled
+      ? "Reativa o envio automático dos arquivos deste lote ao clicar em 'Enviar arquivos'."
+      : "Cancela o envio automático deste lote no momento para que você possa clicar em 'Enviar arquivos' e selecionar os arquivos manualmente pelo computador.";
+
+    const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = isCancelled ? 'cca-nlm-cancel-btn cca-nlm-reactivate-btn' : 'cca-nlm-cancel-btn';
+    actionBtn.id = isCancelled ? 'cca-nlm-reactivate-auto-btn' : 'cca-nlm-cancel-auto-btn';
+    actionBtn.title = tooltipText;
+
+    const btnIcon = document.createElement('span');
+    btnIcon.className = 'cca-icon';
+    btnIcon.textContent = isCancelled ? '🔄 ' : '✕ ';
+    actionBtn.appendChild(btnIcon);
+
+    const btnText = document.createTextNode(isCancelled ? 'Reativar envio automático' : 'Cancelar envio automático');
+    actionBtn.appendChild(btnText);
+
+    // Tooltip visual flutuante
+    const bubble = document.createElement('span');
+    bubble.className = 'cca-nlm-tooltip-bubble';
+    bubble.textContent = tooltipText;
+    actionBtn.appendChild(bubble);
+
+    if (isCancelled) {
+      actionBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[CCA-Bridge] Reativação do envio automático acionada pelo usuário no modal.');
+        __autoUploadCancelledMomentarily = false;
+        __currentBatchInfo.isCancelled = false;
+        if (document.documentElement.dataset) {
+          document.documentElement.dataset.ccaNlmCancelled = '0';
+        }
+        bar.dataset.renderKey = '';
+        window.postMessage({
+          type: 'CCA_NLM_REACTIVATE_AUTO_UPLOAD',
+          batchCode: __currentBatchInfo.batchCode,
+          path: __currentBatchInfo.path
+        }, '*');
+        renderOrUpdateBatchInfo(dialog, uploadBtn);
+        ensureModalButtonHighlighted();
+      };
+    } else {
+      actionBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[CCA-Bridge] Cancelamento do envio automático acionado pelo usuário no modal.');
+        __autoUploadCancelledMomentarily = true;
+        __currentBatchInfo.isCancelled = true;
+        __armedFiles = null;
+        clearTimeout(__armedTimer);
+        if (document.documentElement.dataset) {
+          document.documentElement.dataset.ccaNlmCancelled = '1';
+        }
+        bar.dataset.renderKey = '';
+        window.postMessage({
+          type: 'CCA_NLM_AUTO_UPLOAD_CANCELLED',
+          batchCode: __currentBatchInfo.batchCode,
+          path: __currentBatchInfo.path
+        }, '*');
+        renderOrUpdateBatchInfo(dialog, uploadBtn);
+        ensureModalButtonHighlighted();
+      };
+    }
+
+    header.appendChild(actionBtn);
+    bar.appendChild(header);
+
+    // 3. Aviso explicativo em modo manual se cancelado
+    if (isCancelled) {
+      const hint = document.createElement('div');
+      hint.className = 'cca-nlm-manual-hint';
+      hint.textContent = '✋ Envio automático cancelado no momento. Clique no botão destacado "Enviar arquivos" acima para selecionar arquivos manualmente do seu computador.';
+      bar.appendChild(hint);
+    }
+  }
+
   function ensureModalButtonHighlighted() {
-    if (!__armedFiles || __armedFiles.length === 0) return false;
     const dialog = getOpenDialog();
     if (!dialog) return false;
     let uploadBtn = findUploadButton(dialog) || findUploadButton(document.querySelector('.cdk-overlay-container'));
@@ -638,21 +1019,27 @@
       } catch (_) {}
     }
 
+    renderOrUpdateBatchInfo(dialog, uploadBtn);
+
     if (!uploadBtn.__ccaClickAttached) {
       uploadBtn.__ccaClickAttached = true;
       uploadBtn.addEventListener(
         'click',
         () => {
-          console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" destacado!');
-          setTimeout(() => {
-            if (__armedFiles && __armedFiles.length > 0) {
+          if (__autoUploadCancelledMomentarily) {
+            console.log('[CCA-Bridge] Envio automático cancelado momentaneamente. Seleção manual ativada.');
+            return;
+          }
+
+          if (__armedFiles && __armedFiles.length > 0) {
+            console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" com lote armado! Injetando arquivos...');
+            setTimeout(() => {
+              if (__autoUploadCancelledMomentarily) return;
               const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
-              if (fileInput) {
+              if (fileInput && __armedFiles && __armedFiles.length > 0) {
                 console.log('[CCA-Bridge] Injetando arquivos diretamente no fileInput:', fileInput);
                 const filesToInject = __armedFiles;
                 __armedFiles = null;
-                stopHighlightWatcher();
-                clearHighlights();
                 setFilesOnInput(fileInput, filesToInject);
                 window.postMessage(
                   {
@@ -662,11 +1049,11 @@
                   },
                   '*'
                 );
+                renderOrUpdateBatchInfo(dialog, uploadBtn);
               }
-            }
-          }, 35);
-        },
-        { once: true }
+            }, 35);
+          }
+        }
       );
     }
 
@@ -682,7 +1069,13 @@
           () => {
             console.log('[CCA-Bridge] Modal fechado pelo usuário via botão Fechar/Cancelar.');
             __armedFiles = null;
-            stopHighlightWatcher();
+            __autoUploadCancelledMomentarily = false;
+            __currentBatchInfo.isCancelled = false;
+            if (document.documentElement.dataset) {
+              document.documentElement.dataset.ccaNlmCancelled = '0';
+            }
+            const bar = dialog.querySelector('#cca-nlm-batch-info-container');
+            if (bar) bar.remove();
             clearHighlights();
             window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
           },
@@ -700,7 +1093,13 @@
         () => {
           console.log('[CCA-Bridge] Modal fechado pelo usuário via clique no backdrop.');
           __armedFiles = null;
-          stopHighlightWatcher();
+          __autoUploadCancelledMomentarily = false;
+          __currentBatchInfo.isCancelled = false;
+          if (document.documentElement.dataset) {
+            document.documentElement.dataset.ccaNlmCancelled = '0';
+          }
+          const bar = dialog.querySelector('#cca-nlm-batch-info-container');
+          if (bar) bar.remove();
           clearHighlights();
           window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
         },
@@ -714,59 +1113,66 @@
   if (!window.__ccaEscapeHooked) {
     window.__ccaEscapeHooked = true;
     window.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape' && __armedFiles) {
-        console.log('[CCA-Bridge] Modal fechado pelo usuário via tecla Escape.');
-        __armedFiles = null;
-        stopHighlightWatcher();
-        clearHighlights();
-        window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+      if (ev.key === 'Escape') {
+        const dialog = getOpenDialog();
+        if (dialog) {
+          console.log('[CCA-Bridge] Modal fechado pelo usuário via tecla Escape.');
+          __armedFiles = null;
+          __autoUploadCancelledMomentarily = false;
+          __currentBatchInfo.isCancelled = false;
+          if (document.documentElement.dataset) {
+            document.documentElement.dataset.ccaNlmCancelled = '0';
+          }
+          const bar = dialog.querySelector('#cca-nlm-batch-info-container');
+          if (bar) bar.remove();
+          clearHighlights();
+          window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+        }
       }
     });
   }
 
+  let __lastModalOpenState = false;
+  function checkModalOpenState() {
+    const dialog = getOpenDialog();
+    const isOpen = Boolean(dialog);
+    if (isOpen && !__lastModalOpenState) {
+      __lastModalOpenState = true;
+      console.log('[CCA-Bridge] Modal de fontes detectado como ABERTO.');
+      window.postMessage({ type: 'CCA_NLM_MODAL_OPENED' }, '*');
+    } else if (!isOpen && __lastModalOpenState) {
+      __lastModalOpenState = false;
+      console.log('[CCA-Bridge] Modal de fontes detectado como FECHADO.');
+      __armedFiles = null;
+      __autoUploadCancelledMomentarily = false;
+      __currentBatchInfo.isCancelled = false;
+      if (document.documentElement.dataset) {
+        document.documentElement.dataset.ccaNlmCancelled = '0';
+      }
+      clearHighlights();
+      window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
+    }
+    if (dialog) {
+      ensureModalButtonHighlighted();
+    }
+  }
+
   function startHighlightWatcher() {
     stopHighlightWatcher();
-    let dialogSeen = Boolean(getOpenDialog());
-    ensureModalButtonHighlighted();
+    checkModalOpenState();
 
-    // 1. Intervalo de monitoramento para capturar renderização do Angular sem forçar abertura de modal
     let elapsed = 0;
     __highlightWatcherTimer = setInterval(() => {
       elapsed += 250;
-      if (!__armedFiles || elapsed > 60000) {
+      checkModalOpenState();
+      if (!getOpenDialog() && elapsed > 60000) {
         stopHighlightWatcher();
-        return;
-      }
-      const dialog = getOpenDialog();
-      if (dialog) {
-        dialogSeen = true;
-        ensureModalButtonHighlighted();
-      } else if (dialogSeen) {
-        console.log('[CCA-Bridge] Modal fechado detectado pelo watcher.');
-        __armedFiles = null;
-        stopHighlightWatcher();
-        clearHighlights();
-        window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
-        return;
       }
     }, 250);
 
-    // 2. MutationObserver para reagir instantaneamente quando o modal for inserido ou removido do DOM
     try {
       __highlightObserver = new MutationObserver(() => {
-        if (__armedFiles && __armedFiles.length > 0) {
-          const dialog = getOpenDialog();
-          if (dialog) {
-            dialogSeen = true;
-            ensureModalButtonHighlighted();
-          } else if (dialogSeen) {
-            console.log('[CCA-Bridge] Modal fechado detectado pelo MutationObserver.');
-            __armedFiles = null;
-            stopHighlightWatcher();
-            clearHighlights();
-            window.postMessage({ type: 'CCA_NLM_MODAL_CLOSED_BY_USER' }, '*');
-          }
-        }
+        checkModalOpenState();
       });
       __highlightObserver.observe(document.body || document.documentElement, {
         childList: true,
@@ -774,6 +1180,24 @@
       });
     } catch (_) {}
   }
+
+  function initGlobalModalWatcher() {
+    try {
+      const globalObs = new MutationObserver(() => {
+        checkModalOpenState();
+      });
+      globalObs.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true
+      });
+    } catch (_) {}
+
+    setInterval(() => {
+      checkModalOpenState();
+    }, 400);
+  }
+
+  initGlobalModalWatcher();
 
   async function handleUploadFiles(payload) {
     const rawFiles = payload?.files || [];
@@ -819,7 +1243,7 @@
     }
 
     // 2. Arma o interceptador global no MAIN world
-    armInterceptor(webFiles);
+    armInterceptor(webFiles, payload);
 
     // 3. Inicia o watcher contínuo que busca o botão e o destaca no modal do NotebookLM
     startHighlightWatcher();

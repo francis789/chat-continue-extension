@@ -3626,18 +3626,43 @@
     }
   }
 
+  function extractBatchCode(path) {
+    if (!path) return '';
+    const clean = String(path).trim().replace(/^[\\/"']+|[\\/"']+$/g, '');
+    const parts = clean.split(/[/\\]/).filter(Boolean);
+    return parts[parts.length - 1] || clean;
+  }
+
+  function syncNlmDataset() {
+    try {
+      const batchCode = extractBatchCode(state.nlmSourcesPath || '');
+      if (document.documentElement.dataset) {
+        document.documentElement.dataset.ccaNlmBatchCode = batchCode;
+        document.documentElement.dataset.ccaNlmSourcesPath = state.nlmSourcesPath || '';
+        document.documentElement.dataset.ccaAutoUploadFiles = state.autoUploadFiles ? '1' : '0';
+        document.documentElement.dataset.ccaNlmCancelled = userCancelledModalUpload ? '1' : '0';
+      }
+    } catch (_) {}
+  }
+
   function highlightSendButton(highlight = true, path = '') {
     const pasteBtn = rootEl?.querySelector('#cca-paste-and-add-sources');
     const addonBtn = rootEl?.querySelector('#cca-add-sources-manual');
+    const panelBatchCode = rootEl?.querySelector('#cca-panel-batch-code');
     const targetPath = (path || state.nlmSourcesPath || '').trim();
+    const batchCode = extractBatchCode(targetPath);
+    syncNlmDataset();
+
+    if (panelBatchCode) {
+      panelBatchCode.textContent = batchCode || 'Nenhum';
+    }
 
     if (highlight && targetPath) {
       pasteBtn?.classList.add('cca-btn-highlighted');
       addonBtn?.classList.add('cca-btn-highlighted');
       if (pasteBtn) {
-        const shortName = targetPath.split(/[/\\]/).filter(Boolean).pop() || targetPath;
-        pasteBtn.innerHTML = `📁 Enviar Arquivos: <strong>${shortName}</strong> ⬆️`;
-        pasteBtn.title = `Clique aqui para enviar os arquivos da pasta "${targetPath}" ao NotebookLM`;
+        pasteBtn.innerHTML = `📁 Enviar Arquivos: <strong>${escapeHtml(batchCode || targetPath)}</strong> ⬆️`;
+        pasteBtn.title = `Clique aqui para enviar os arquivos do lote "${batchCode || targetPath}" ao NotebookLM`;
       }
       if (addonBtn) {
         addonBtn.title = `Enviar arquivos da pasta "${targetPath}" ao NotebookLM`;
@@ -3645,6 +3670,7 @@
       setStatus(
         `Pasta detectada:<br>` +
         `<strong style="word-break: break-all; color: #58a6ff;">${targetPath}</strong><br>` +
+        `Lote: <strong style="color: #7ee787;">${escapeHtml(batchCode || targetPath)}</strong><br>` +
         `Clique em <strong>"Enviar Arquivos"</strong> para adicionar.`
       );
     } else {
@@ -3703,12 +3729,13 @@
   let lastAutoArmedPath = '';
   let lastUploadedPath = '';
   let userDismissedModal = false;
+  let userCancelledModalUpload = false;
 
   async function autoArmAndHighlightModalUpload(targetPath, force = false) {
     if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
     if (isAutoArming) return;
-    // Se o envio automático estiver desabilitado ou a pasta já foi enviada, não re-arma sozinho
-    if (!force && (!state.autoUploadFiles || lastUploadedPath === targetPath)) return;
+    // Se o envio automático estiver desabilitado, cancelado pelo usuário no momento ou a pasta já foi enviada, não re-arma sozinho
+    if (!force && (userCancelledModalUpload || !state.autoUploadFiles || lastUploadedPath === targetPath)) return;
 
     // CRUCIAL: Só executa preparação se o modal de fontes do NotebookLM estiver REALMENTE aberto na tela!
     const dialog = getNotebookLMOpenDialog();
@@ -3722,7 +3749,8 @@
 
     isAutoArming = true;
     lastAutoArmedPath = targetPath;
-    dlog('autoArmAndHighlightModalUpload: preparando fontes para destacar modal:', targetPath);
+    const batchCode = extractBatchCode(targetPath);
+    dlog('autoArmAndHighlightModalUpload: preparando fontes para destacar modal:', targetPath, 'Lote:', batchCode);
 
     try {
       chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: targetPath }, async (res) => {
@@ -3744,15 +3772,28 @@
           return;
         }
 
+        const resolvedBatchCode = res.folderName || batchCode;
+        callMainWorldBridge('update_batch_info', {
+          batchCode: resolvedBatchCode,
+          folderName: res.folderName || resolvedBatchCode,
+          path: targetPath,
+          count: files.length,
+          autoUpload: state.autoUploadFiles
+        });
+
         checkAndUpdateInputWithFiles(files, targetPath);
 
-        setStatus(`📁 <strong>${files.length}</strong> arquivo(s) prontos em "${res.folderName}". Destacando botão no modal…`);
+        setStatus(`📁 Lote <strong>${escapeHtml(resolvedBatchCode)}</strong>: <strong>${files.length}</strong> arquivo(s) prontos. Destacando botão no modal…`);
         try {
-          const result = await uploadFilesToNotebookLM(files, 'file');
+          const result = await uploadFilesToNotebookLM(files, 'file', {
+            batchCode: resolvedBatchCode,
+            folderName: res.folderName || resolvedBatchCode,
+            path: targetPath
+          });
           if (result?.waitingManualClick) {
             setStatus(
               `👉 <strong>Pronto para adicionar!</strong> Dê <strong>1 clique no botão destacado em verde ("↑ Enviar arquivos")</strong> no centro da tela.<br>` +
-              `Os <strong>${result.count}</strong> arquivos serão inseridos diretamente no NotebookLM!`
+              `Lote: <strong style="color:#7ee787;">${escapeHtml(resolvedBatchCode)}</strong> (${result.count} arquivos).`
             );
           }
         } catch (uErr) {
@@ -3919,14 +3960,27 @@
 
       checkAndUpdateInputWithFiles(files, targetPath);
 
-      setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${res.folderName}". Abrindo modal e preparando envio ${actionDesc}…`);
+      const resolvedBatchCode = res.folderName || extractBatchCode(targetPath);
+      callMainWorldBridge('update_batch_info', {
+        batchCode: resolvedBatchCode,
+        folderName: res.folderName || resolvedBatchCode,
+        path: targetPath,
+        count: files.length,
+        autoUpload: state.autoUploadFiles
+      });
+
+      setStatus(`Encontrados <strong>${files.length}</strong> arquivo(s) em "${escapeHtml(resolvedBatchCode)}". Abrindo modal e preparando envio ${actionDesc}…`);
 
       try {
-        const result = await uploadFilesToNotebookLM(files, mode);
+        const result = await uploadFilesToNotebookLM(files, mode, {
+          batchCode: resolvedBatchCode,
+          folderName: res.folderName || resolvedBatchCode,
+          path: targetPath
+        });
         if (result.waitingManualClick) {
           setStatus(
             `👉 <strong>Pronto para injetar!</strong> Dê <strong>1 clique no botão destacado em verde</strong> ("Selecionar arquivos / Enviar arquivos") no centro da tela.<br>` +
-            `Os <strong>${result.count}</strong> arquivo(s) serão adicionados diretamente no NotebookLM sem abrir pastas do SO!`
+            `Lote: <strong style="color:#7ee787;">${escapeHtml(resolvedBatchCode)}</strong> (${result.count} arquivo${result.count > 1 ? 's' : ''}).`
           );
           return;
         }
@@ -3949,18 +4003,70 @@
     if (ev.data?.type === 'CCA_NLM_UPLOAD_CONFIRMED') {
       lastUploadedPath = state.nlmSourcesPath || '';
       userDismissedModal = true;
+      userCancelledModalUpload = false;
+      syncNlmDataset();
       highlightSendButton(false);
       const names = (ev.data.fileNames || []).slice(0, 3).join(', ') + ((ev.data.fileNames?.length || 0) > 3 ? '…' : '');
       setStatus(`✓ <strong>${ev.data.count}</strong> fonte(s) enviada(s) ao NotebookLM (upload de arquivos)!<br>[${names}]`);
     }
 
+    if (ev.data?.type === 'CCA_NLM_AUTO_UPLOAD_CANCELLED') {
+      userCancelledModalUpload = true;
+      syncNlmDataset();
+      setStatus(
+        `✋ <strong>Envio automático cancelado no momento.</strong><br>` +
+        `Clique no botão destacado <strong>"Enviar arquivos"</strong> no modal para selecionar manualmente pelo computador.`
+      );
+    }
+
+    if (ev.data?.type === 'CCA_NLM_REACTIVATE_AUTO_UPLOAD') {
+      userCancelledModalUpload = false;
+      syncNlmDataset();
+      const targetPath = ev.data.path || state.nlmSourcesPath;
+      if (targetPath) {
+        void autoArmAndHighlightModalUpload(targetPath, true);
+      }
+    }
+
+    if (ev.data?.type === 'CCA_NLM_REQUEST_BATCH_INFO') {
+      syncNlmDataset();
+      const bCode = extractBatchCode(state.nlmSourcesPath);
+      callMainWorldBridge('update_batch_info', {
+        batchCode: bCode,
+        folderName: bCode,
+        path: state.nlmSourcesPath || '',
+        autoUpload: state.autoUploadFiles,
+        isCancelled: userCancelledModalUpload
+      });
+    }
+
+    if (ev.data?.type === 'CCA_NLM_MODAL_OPENED') {
+      userCancelledModalUpload = false;
+      userDismissedModal = false;
+      syncNlmDataset();
+      const bCode = extractBatchCode(state.nlmSourcesPath);
+      callMainWorldBridge('update_batch_info', {
+        batchCode: bCode,
+        folderName: bCode,
+        path: state.nlmSourcesPath || '',
+        autoUpload: state.autoUploadFiles,
+        isCancelled: false
+      });
+      if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath && lastUploadedPath !== state.nlmSourcesPath) {
+        void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+      }
+    }
+
     if (ev.data?.type === 'CCA_NLM_MODAL_CLOSED_BY_USER') {
       userDismissedModal = true;
+      userCancelledModalUpload = false;
+      syncNlmDataset();
       if (state.nlmSourcesPath) {
         highlightSendButton(true, state.nlmSourcesPath);
         setStatus(
           `Modal de fontes fechado.<br>` +
           `Pasta detectada: <strong style="word-break: break-all; color: #58a6ff;">${state.nlmSourcesPath}</strong><br>` +
+          `Lote: <strong style="color: #7ee787;">${escapeHtml(extractBatchCode(state.nlmSourcesPath))}</strong><br>` +
           `Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.`
         );
       } else {
@@ -4011,7 +4117,7 @@
     return false;
   }
 
-  async function uploadFilesToNotebookLM(filesData, mode = 'file') {
+  async function uploadFilesToNotebookLM(filesData, mode = 'file', batchInfo = {}) {
     console.log(`[CCA] Iniciando uploadFilesToNotebookLM (${mode}) com`, filesData.length, 'arquivos...');
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const bridgeAction = mode === 'text' ? 'upload_text_sources' : 'upload_files';
@@ -4021,7 +4127,14 @@
     if (bridgeReady) {
       console.log('[CCA] Main World Bridge pronto. Enviando requisição:', bridgeAction);
       setStatus(`Enviando ${filesData.length} fontes pelo Main World Bridge…`);
-      const bridgeRes = await callMainWorldBridge(bridgeAction, { files: filesData });
+      const payloadData = {
+        files: filesData,
+        batchCode: batchInfo.batchCode || extractBatchCode(batchInfo.path || state.nlmSourcesPath),
+        folderName: batchInfo.folderName || '',
+        path: batchInfo.path || state.nlmSourcesPath || '',
+        count: filesData.length
+      };
+      const bridgeRes = await callMainWorldBridge(bridgeAction, payloadData);
       console.log('[CCA] Resposta do Main World Bridge:', bridgeRes);
       if (bridgeRes?.ok) {
         return {
@@ -4346,6 +4459,7 @@
     } catch {
       // storage indisponível
     }
+    syncNlmDataset();
   }
 
   function applyTheme(theme) {
@@ -5204,6 +5318,13 @@
               </button>
             </div>
 
+            <div id="cca-panel-batch-row" style="margin-top:6px; display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:11px; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.3); border-radius:6px; padding:4px 8px;">
+              <span>📦 Lote: <strong id="cca-panel-batch-code" style="color:#7ee787;">${escapeHtml(extractBatchCode(state.nlmSourcesPath) || 'Nenhum')}</strong></span>
+              <button type="button" id="cca-panel-cancel-batch" class="cca-btn-mini" style="color:#f87171; border-color:#f87171; background:transparent; padding:2px 6px; font-size:10px; cursor:pointer;" title="Cancela o envio automático deste lote no momento para que você possa clicar em 'Enviar arquivos' e selecionar os arquivos manualmente pelo computador.">
+                ✕ Cancelar envio
+              </button>
+            </div>
+
             <div style="margin-top:6px;">
               <label style="display:flex; align-items:center; gap:7px; font-size:11px; cursor:pointer; user-select:none; color:inherit; opacity:0.9;" title="Habilita ou desabilita o envio automático dos arquivos ao abrir o modal">
                 <input type="checkbox" id="cca-auto-upload-files-section" ${state.autoUploadFiles ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0;" />
@@ -5605,6 +5726,17 @@
       });
     }
 
+    const panelCancelBatchBtn = rootEl.querySelector('#cca-panel-cancel-batch');
+    if (panelCancelBatchBtn) {
+      panelCancelBatchBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        userCancelledModalUpload = true;
+        callMainWorldBridge('cancel_batch', {});
+        setStatus('Envio automático do lote cancelado no momento. Seleção manual ativa.');
+      });
+    }
+
     const linuxHelpBtn = rootEl.querySelector('#cca-linux-help-btn');
     const linuxHelpBox = rootEl.querySelector('#cca-linux-help-box');
     const closeLinuxHelpBtn = rootEl.querySelector('#cca-close-linux-help');
@@ -5791,6 +5923,7 @@
             const autoUploadSectionEl = rootEl.querySelector('#cca-auto-upload-files-section');
             if (autoUploadSectionEl) autoUploadSectionEl.checked = state.autoUploadFiles;
           }
+          syncNlmDataset();
           cb();
         } catch (innerErr) {
           console.error('[CCA] Erro ao carregar configurações:', innerErr);
