@@ -2240,10 +2240,11 @@
         lastObservedUrl = location.href;
         dlog('runHeartbeat: URL alterada no NotebookLM para:', lastObservedUrl);
         void autoCaptureClipboardPath();
-      } else if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath && !userDismissedModal && lastUploadedPath !== state.nlmSourcesPath) {
+      } else if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath && !userCancelledModalUpload && !userDismissedModal) {
         const dialog = getNotebookLMOpenDialog();
-        if (dialog && !isNotebookLMModalButtonHighlighted()) {
-          void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+        const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+        if (dialog && !isBridgeArmed) {
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
         }
       }
     }
@@ -3744,8 +3745,9 @@
     // O modal está aberto na tela, portanto não está descartado
     userDismissedModal = false;
 
-    // Evita chamadas repetidas desnecessárias se o botão do modal já estiver destacado
-    if (!force && lastAutoArmedPath === targetPath && isNotebookLMModalButtonHighlighted()) return;
+    // Evita chamadas repetidas desnecessárias se o bridge já estiver armado com os arquivos do caminho solicitado
+    const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+    if (!force && lastAutoArmedPath === targetPath && isBridgeArmed) return;
 
     isAutoArming = true;
     lastAutoArmedPath = targetPath;
@@ -3814,8 +3816,9 @@
       if (!clean) {
         if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
           if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
-          if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
-            void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+          const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+          if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !userDismissedModal && !isBridgeArmed && getNotebookLMOpenDialog()) {
+            void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
           }
         }
         return;
@@ -3825,8 +3828,9 @@
       if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
         if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
           if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
-          if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && !userDismissedModal && getNotebookLMOpenDialog()) {
-            void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+          const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+          if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !userDismissedModal && !isBridgeArmed && getNotebookLMOpenDialog()) {
+            void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
           }
         }
         return;
@@ -3854,15 +3858,17 @@
       }
 
       // Só prepara/destaca o botão no modal do NotebookLM se envio automático estiver ativo e o modal de fontes já estiver aberto!
-      if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== clean && !userDismissedModal && getNotebookLMOpenDialog()) {
-        void autoArmAndHighlightModalUpload(clean, isNewPath);
+      const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+      if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && (!isBridgeArmed || isNewPath) && !userDismissedModal && getNotebookLMOpenDialog()) {
+        void autoArmAndHighlightModalUpload(clean, true);
       }
     } catch (e) {
       dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
       if (state.nlmSourcesPath && isNotebookLM() && !userDismissedModal) {
         highlightSendButton(true, state.nlmSourcesPath);
-        if (state.autoUploadFiles && isNotebookLMNotebookPage() && lastUploadedPath !== state.nlmSourcesPath && getNotebookLMOpenDialog()) {
-          void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+        const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
+        if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !isBridgeArmed && getNotebookLMOpenDialog()) {
+          void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
         }
       }
     }
@@ -4040,9 +4046,18 @@
       });
     }
 
+    if (ev.data?.type === 'CCA_NLM_REQUEST_ARM') {
+      const targetPath = ev.data.path || state.nlmSourcesPath;
+      if (targetPath) {
+        void autoArmAndHighlightModalUpload(targetPath, true);
+      }
+    }
+
     if (ev.data?.type === 'CCA_NLM_MODAL_OPENED') {
       userCancelledModalUpload = false;
       userDismissedModal = false;
+      lastAutoArmedPath = '';
+      lastUploadedPath = '';
       syncNlmDataset();
       const bCode = extractBatchCode(state.nlmSourcesPath);
       callMainWorldBridge('update_batch_info', {
@@ -4052,8 +4067,8 @@
         autoUpload: state.autoUploadFiles,
         isCancelled: false
       });
-      if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath && lastUploadedPath !== state.nlmSourcesPath) {
-        void autoArmAndHighlightModalUpload(state.nlmSourcesPath);
+      if (state.autoUploadFiles && isNotebookLMNotebookPage() && state.nlmSourcesPath) {
+        void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
       }
     }
 

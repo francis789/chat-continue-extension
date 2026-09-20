@@ -243,28 +243,18 @@
     } catch (_) {}
   }
 
-  function armInterceptor(webFiles, batchInfo = {}) {
-    __armedFiles = webFiles;
-    __autoUploadCancelledMomentarily = false;
-    if (batchInfo) {
-      if (batchInfo.batchCode) __currentBatchInfo.batchCode = batchInfo.batchCode;
-      if (batchInfo.folderName) __currentBatchInfo.folderName = batchInfo.folderName;
-      if (batchInfo.path) __currentBatchInfo.path = batchInfo.path;
-      __currentBatchInfo.count = webFiles.length;
-      __currentBatchInfo.isCancelled = false;
-    }
+  let __justInjectedTimestamp = 0;
+  let __pendingAutoInjectOnClick = false;
 
-    clearTimeout(__armedTimer);
-    __armedTimer = setTimeout(() => {
-      __armedFiles = null;
-      console.log('[CCA-Bridge] Interceptador de arquivos desarmado por timeout.');
-      const dialog = getOpenDialog();
-      if (dialog) {
-        ensureModalButtonHighlighted();
-        renderOrUpdateBatchInfo(dialog);
+  function updateArmedDataset(isArmed) {
+    try {
+      if (document.documentElement?.dataset) {
+        document.documentElement.dataset.ccaNlmArmed = isArmed ? '1' : '0';
       }
-    }, 60000);
+    } catch (_) {}
+  }
 
+  function installNativeHooks() {
     if (!window.__ccaInputClickHooked) {
       window.__ccaInputClickHooked = true;
       const origInputClick = HTMLInputElement.prototype.click;
@@ -273,6 +263,8 @@
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].click() interceptado!', this);
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          updateArmedDataset(false);
+          __justInjectedTimestamp = Date.now();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -287,6 +279,10 @@
           }, 30);
           return; // Suprime a abertura da janela do SO!
         }
+        if (this.type === 'file' && !__autoUploadCancelledMomentarily && Date.now() - __justInjectedTimestamp < 2000) {
+          console.log('[CCA-Bridge] Suprimindo abertura de diálogo nativo após injeção automática recente.');
+          return;
+        }
         return origInputClick.apply(this, arguments);
       };
     }
@@ -299,6 +295,8 @@
           console.log('[CCA-Bridge] SUCESSO: input[type="file"].showPicker() interceptado!', this);
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          updateArmedDataset(false);
+          __justInjectedTimestamp = Date.now();
           setFilesOnInput(this, filesToInject);
           setTimeout(() => {
             setFilesOnInput(this, filesToInject);
@@ -313,6 +311,10 @@
           }, 30);
           return; // Suprime o picker nativo do SO!
         }
+        if (this.type === 'file' && !__autoUploadCancelledMomentarily && Date.now() - __justInjectedTimestamp < 2000) {
+          console.log('[CCA-Bridge] Suprimindo showPicker nativo após injeção automática recente.');
+          return;
+        }
         return origShowPicker.apply(this, arguments);
       };
     }
@@ -325,6 +327,8 @@
           console.log('[CCA-Bridge] SUCESSO: window.showOpenFilePicker() interceptado!', opts);
           const filesToInject = __armedFiles;
           __armedFiles = null;
+          updateArmedDataset(false);
+          __justInjectedTimestamp = Date.now();
           window.postMessage(
             {
               type: 'CCA_NLM_UPLOAD_CONFIRMED',
@@ -342,8 +346,68 @@
             requestPermission: async () => 'granted'
           }));
         }
+        if (!__autoUploadCancelledMomentarily && Date.now() - __justInjectedTimestamp < 2000) {
+          console.log('[CCA-Bridge] Suprimindo showOpenFilePicker nativo após injeção automática recente.');
+          return [];
+        }
         return origPicker.apply(this, arguments);
       };
+    }
+  }
+
+  installNativeHooks();
+
+  function armInterceptor(webFiles, batchInfo = {}) {
+    __armedFiles = webFiles;
+    __autoUploadCancelledMomentarily = false;
+    updateArmedDataset(true);
+    if (batchInfo) {
+      if (batchInfo.batchCode) __currentBatchInfo.batchCode = batchInfo.batchCode;
+      if (batchInfo.folderName) __currentBatchInfo.folderName = batchInfo.folderName;
+      if (batchInfo.path) __currentBatchInfo.path = batchInfo.path;
+      __currentBatchInfo.count = webFiles.length;
+      __currentBatchInfo.isCancelled = false;
+    }
+
+    clearTimeout(__armedTimer);
+    __armedTimer = setTimeout(() => {
+      __armedFiles = null;
+      updateArmedDataset(false);
+      console.log('[CCA-Bridge] Interceptador de arquivos desarmado por timeout.');
+      const dialog = getOpenDialog();
+      if (dialog) {
+        ensureModalButtonHighlighted();
+        renderOrUpdateBatchInfo(dialog);
+      }
+    }, 60000);
+
+    installNativeHooks();
+
+    // Se o usuário clicou em "Enviar arquivos" antes dos arquivos terminarem de ler do disco, injeta imediatamente
+    if (__pendingAutoInjectOnClick) {
+      __pendingAutoInjectOnClick = false;
+      const dialog = getOpenDialog();
+      const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
+      if (fileInput && __armedFiles && __armedFiles.length > 0) {
+        console.log('[CCA-Bridge] Injeção pendente acionada por clique prévio executada agora!');
+        const filesToInject = __armedFiles;
+        __armedFiles = null;
+        updateArmedDataset(false);
+        __justInjectedTimestamp = Date.now();
+        setFilesOnInput(fileInput, filesToInject);
+        setTimeout(() => {
+          setFilesOnInput(fileInput, filesToInject);
+        }, 30);
+        window.postMessage(
+          {
+            type: 'CCA_NLM_UPLOAD_CONFIRMED',
+            count: filesToInject.length,
+            fileNames: filesToInject.map((f) => f.name)
+          },
+          '*'
+        );
+        if (dialog) renderOrUpdateBatchInfo(dialog);
+      }
     }
   }
 
@@ -1025,7 +1089,7 @@
       uploadBtn.__ccaClickAttached = true;
       uploadBtn.addEventListener(
         'click',
-        () => {
+        (e) => {
           if (__autoUploadCancelledMomentarily) {
             console.log('[CCA-Bridge] Envio automático cancelado momentaneamente. Seleção manual ativada.');
             return;
@@ -1033,27 +1097,44 @@
 
           if (__armedFiles && __armedFiles.length > 0) {
             console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" com lote armado! Injetando arquivos...');
-            setTimeout(() => {
-              if (__autoUploadCancelledMomentarily) return;
-              const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
-              if (fileInput && __armedFiles && __armedFiles.length > 0) {
-                console.log('[CCA-Bridge] Injetando arquivos diretamente no fileInput:', fileInput);
-                const filesToInject = __armedFiles;
-                __armedFiles = null;
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const filesToInject = __armedFiles;
+            __armedFiles = null;
+            updateArmedDataset(false);
+            __justInjectedTimestamp = Date.now();
+
+            const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
+            if (fileInput) {
+              console.log('[CCA-Bridge] Injetando arquivos diretamente no fileInput:', fileInput);
+              setFilesOnInput(fileInput, filesToInject);
+              setTimeout(() => {
                 setFilesOnInput(fileInput, filesToInject);
-                window.postMessage(
-                  {
-                    type: 'CCA_NLM_UPLOAD_CONFIRMED',
-                    count: filesToInject.length,
-                    fileNames: filesToInject.map((f) => f.name)
-                  },
-                  '*'
-                );
-                renderOrUpdateBatchInfo(dialog, uploadBtn);
-              }
-            }, 35);
+              }, 30);
+            }
+            window.postMessage(
+              {
+                type: 'CCA_NLM_UPLOAD_CONFIRMED',
+                count: filesToInject.length,
+                fileNames: filesToInject.map((f) => f.name)
+              },
+              '*'
+            );
+            renderOrUpdateBatchInfo(dialog, uploadBtn);
+            return;
+          } else {
+            console.log('[CCA-Bridge] Botão "Enviar arquivos" clicado sem arquivos armados ainda. Solicitando armamento urgente...');
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            __pendingAutoInjectOnClick = true;
+            window.postMessage({ type: 'CCA_NLM_REQUEST_ARM', path: __currentBatchInfo.path }, '*');
+            return;
           }
-        }
+        },
+        true
       );
     }
 
@@ -1069,6 +1150,8 @@
           () => {
             console.log('[CCA-Bridge] Modal fechado pelo usuário via botão Fechar/Cancelar.');
             __armedFiles = null;
+            __pendingAutoInjectOnClick = false;
+            updateArmedDataset(false);
             __autoUploadCancelledMomentarily = false;
             __currentBatchInfo.isCancelled = false;
             if (document.documentElement.dataset) {
@@ -1093,6 +1176,8 @@
         () => {
           console.log('[CCA-Bridge] Modal fechado pelo usuário via clique no backdrop.');
           __armedFiles = null;
+          __pendingAutoInjectOnClick = false;
+          updateArmedDataset(false);
           __autoUploadCancelledMomentarily = false;
           __currentBatchInfo.isCancelled = false;
           if (document.documentElement.dataset) {
@@ -1118,6 +1203,8 @@
         if (dialog) {
           console.log('[CCA-Bridge] Modal fechado pelo usuário via tecla Escape.');
           __armedFiles = null;
+          __pendingAutoInjectOnClick = false;
+          updateArmedDataset(false);
           __autoUploadCancelledMomentarily = false;
           __currentBatchInfo.isCancelled = false;
           if (document.documentElement.dataset) {
@@ -1144,6 +1231,8 @@
       __lastModalOpenState = false;
       console.log('[CCA-Bridge] Modal de fontes detectado como FECHADO.');
       __armedFiles = null;
+      __pendingAutoInjectOnClick = false;
+      updateArmedDataset(false);
       __autoUploadCancelledMomentarily = false;
       __currentBatchInfo.isCancelled = false;
       if (document.documentElement.dataset) {
