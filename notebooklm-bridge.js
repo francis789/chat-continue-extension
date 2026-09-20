@@ -1096,41 +1096,53 @@
           }
 
           if (__armedFiles && __armedFiles.length > 0) {
-            console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" com lote armado! Injetando arquivos...');
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-
-            const filesToInject = __armedFiles;
-            __armedFiles = null;
-            updateArmedDataset(false);
-            __justInjectedTimestamp = Date.now();
-
+            console.log('[CCA-Bridge] Clique no botão "Enviar arquivos" com lote armado!');
+            
             const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
             if (fileInput) {
               console.log('[CCA-Bridge] Injetando arquivos diretamente no fileInput:', fileInput);
+
+              const filesToInject = __armedFiles;
+              // We do NOT clear __armedFiles yet, because showOpenFilePicker or input.click might still be called by NotebookLM
+              // Let the native hooks clear it. But we will schedule a cleanup.
+              setTimeout(() => {
+                if (__armedFiles === filesToInject) {
+                  __armedFiles = null;
+                  updateArmedDataset(false);
+                }
+              }, 1000);
+              
+              __justInjectedTimestamp = Date.now();
+
               setFilesOnInput(fileInput, filesToInject);
               setTimeout(() => {
                 setFilesOnInput(fileInput, filesToInject);
               }, 30);
+
+              
+              window.postMessage(
+                {
+                  type: 'CCA_NLM_UPLOAD_CONFIRMED',
+                  count: filesToInject.length,
+                  fileNames: filesToInject.map((f) => f.name)
+                },
+                '*'
+              );
+              renderOrUpdateBatchInfo(dialog, uploadBtn);
+            } else {
+              console.log('[CCA-Bridge] fileInput não encontrado. Deixando o clique fluir para que o NotebookLM acione window.showOpenFilePicker (será interceptado).');
+              // NÃO bloqueamos o evento. __armedFiles continua preenchido para o hook do showOpenFilePicker usar.
             }
-            window.postMessage(
-              {
-                type: 'CCA_NLM_UPLOAD_CONFIRMED',
-                count: filesToInject.length,
-                fileNames: filesToInject.map((f) => f.name)
-              },
-              '*'
-            );
-            renderOrUpdateBatchInfo(dialog, uploadBtn);
             return;
           } else {
-            console.log('[CCA-Bridge] Botão "Enviar arquivos" clicado sem arquivos armados ainda. Solicitando armamento urgente...');
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            __pendingAutoInjectOnClick = true;
-            window.postMessage({ type: 'CCA_NLM_REQUEST_ARM', path: __currentBatchInfo.path }, '*');
+            console.log('[CCA-Bridge] Botão clicado sem arquivos armados.');
+            const fileInput = findAnyFileInput(dialog) || findAnyFileInput(document);
+            if (fileInput) {
+              __pendingAutoInjectOnClick = true;
+              window.postMessage({ type: 'CCA_NLM_REQUEST_ARM', path: __currentBatchInfo.path }, '*');
+            } else {
+              console.log('[CCA-Bridge] fileInput não existe. Não podemos armar tardiamente sem perder o gesto do usuário para showOpenFilePicker. Deixando fluir.');
+            }
             return;
           }
         },

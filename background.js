@@ -834,7 +834,9 @@ async function _getDirCaseInsensitive(parentHandle, targetName) {
   if (!parentHandle || !targetName) return null;
   try {
     return await parentHandle.getDirectoryHandle(targetName);
-  } catch (_) {}
+  } catch (err) {
+    if (err.name === 'NotAllowedError') throw err;
+  }
 
   const targetLower = targetName.toLowerCase();
   try {
@@ -843,7 +845,9 @@ async function _getDirCaseInsensitive(parentHandle, targetName) {
         return handle;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    if (err.name === 'NotAllowedError') throw new Error('Sem permissão para ler a pasta. Clique em "Conectar pasta" novamente.');
+  }
   return null;
 }
 
@@ -864,7 +868,11 @@ async function _searchDirRecursive(parentHandle, targetName, maxDepth = 4) {
         if (found) return found;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    if (err.name === 'NotAllowedError' || err.message?.includes('Sem permissão')) {
+      throw new Error('Sem permissão para ler a pasta. Clique em "Conectar pasta" novamente.');
+    }
+  }
   return null;
 }
 

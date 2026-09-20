@@ -1157,10 +1157,8 @@
     try {
       chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: clean }, (res) => {
         if (!res?.ok || !Array.isArray(res.files) || res.files.length === 0) {
-          if (res?.error === 'no_handle') {
-            if (lastProcessedPathForInput === clean) {
-              lastProcessedPathForInput = '';
-            }
+          if (lastProcessedPathForInput === clean) {
+            lastProcessedPathForInput = '';
           }
           return;
         }
@@ -3893,7 +3891,7 @@
           autoUpload: state.autoUploadFiles
         });
 
-        checkAndUpdateInputWithFiles(files, targetPath);
+        checkAndUpdateInputWithFiles(files, targetPath, true);
 
         setStatus(`📁 Lote <strong>${escapeHtml(resolvedBatchCode)}</strong>: <strong>${files.length}</strong> arquivo(s) prontos. Destacando botão no modal…`);
         try {
@@ -4086,7 +4084,7 @@
         return;
       }
 
-      checkAndUpdateInputWithFiles(files, targetPath);
+      checkAndUpdateInputWithFiles(files, targetPath, true);
 
       const resolvedBatchCode = res.folderName || extractBatchCode(targetPath);
       callMainWorldBridge('update_batch_info', {
