@@ -9,6 +9,7 @@
   window.__CCA_LOADED__ = true;
 
   const STORAGE_KEY = 'cca_settings';
+  const CURRENT_SAVED_TEXTS_VERSION = 3;
   const DEFAULT_SAVED_TEXTS = [
     {
       text: 'Execute o comando.',
@@ -16,19 +17,19 @@
       keywords: '',
     },
     {
-      text: 'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
-      tag: 'Resumos',
-      keywords: 'resumo, resumos',
+      text: 'Faça a classificação conforme comando.',
+      tag: 'Classificação',
+      keywords: 'CLS-',
     },
     {
-      text: 'Faça a classificação.',
-      tag: 'Sumário',
-      keywords: 'classificacao, classificação, cls',
+      text: 'Execute o comando. As questões a serem elaboradas devem ser interpretativas e em inglês, seguindo o estilo de questões do material teórico.',
+      tag: 'Quiz Inglês',
+      keywords: 'QIA- =INGLÊS=',
     },
     {
-      text: 'Faça o sumário.',
+      text: 'Faça o sumário conforme comando.',
       tag: 'Sumário',
-      keywords: 'sumario, sumário, map',
+      keywords: 'SUM-',
     },
   ];
   const DEFAULT_MARKER_MAX = {
@@ -37,7 +38,7 @@
     '=fim=': 1,
   };
   const DEFAULTS = {
-    text: DEFAULT_SAVED_TEXTS.find((it) => it.text === 'Faça a classificação.')?.text || DEFAULT_SAVED_TEXTS[0].text,
+    text: DEFAULT_SAVED_TEXTS[0].text,
     savedTexts: DEFAULT_SAVED_TEXTS,
     times: 100,
     /** Strings alternativas aceitas na resposta da IA (separadas por ponto e vírgula). */
@@ -85,6 +86,9 @@
   const LEGACY_DEFAULT_SAVED_TEXTS = new Set([
     'faça o sumário',
     'faça a classificação',
+    'Faça o sumário.',
+    'Faça a classificação.',
+    'Execute o comando. PROIBIDO qualquer tipo de texto antes ou depois do resumo.',
     'Execute o comando. Lembre-se: use obrigatoriamente a sintaxe =tag= (=id=, =pai=, =tipo=, =texto=, =fonte=, =detalhe=) e nunca dois pontos.',
     'Execute o comando. Uma tag por linha, copiando o exemplo do COMANDO. Proibido: dois pontos (id:), wrapper =tag=(...), vírgula depois do valor, aspas no =texto=.',
   ]);
@@ -918,13 +922,44 @@
       .trim();
   }
 
-  function getKeywordsList(item) {
+  function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function matchTermInFileName(fileNorm, term) {
+    if (!term || !fileNorm) return false;
+    if (fileNorm.includes(term)) return true;
+    try {
+      const escaped = escapeRegex(term);
+      const pattern = escaped.replace(/(?:\\-)|\-/g, '[\\s-_]*');
+      return new RegExp(pattern, 'i').test(fileNorm);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * Extrai grupos de termos das palavras-chave configuradas.
+   * - Grupos separados por vírgula (ou ponto-e-vírgula/quebra de linha) funcionam como E/OU (alternativas).
+   * - Termos dentro de cada grupo separados por espaço são verificados em conjunto (E / conjunção).
+   */
+  function getKeywordGroups(item) {
     const raw = typeof item === 'object' && item?.keywords ? String(item.keywords) : '';
     if (!raw.trim()) return [];
     return raw
       .split(/[,;\n]+/)
-      .map(normalizeSearchKeyword)
-      .filter(Boolean);
+      .map((group) => {
+        return group
+          .split(/\s+/)
+          .map(normalizeSearchKeyword)
+          .filter(Boolean);
+      })
+      .filter((terms) => terms.length > 0);
+  }
+
+  function getKeywordsList(item) {
+    const groups = getKeywordGroups(item);
+    return groups.map((g) => g.join(' '));
   }
 
   function getGeralSavedText() {
@@ -944,6 +979,8 @@
 
   /**
    * Procura palavras-chave dos textos salvos nos títulos dos arquivos.
+   * - Termos separados por espaço são verificados em conjunto (ocorrência em conjunto / E).
+   * - Grupos separados por vírgula funcionam como e/ou (alternativas / OU).
    * Se localizadas, retorna o(s) texto(s) correspondente(s).
    * Caso não sejam localizadas, retorna o texto da tag Geral (definida como principal).
    */
@@ -969,26 +1006,58 @@
       return { text: getGeralSavedText(), isFallback: true, matchedCount: 0, tags: ['Geral'] };
     }
 
-    const matchingTexts = [];
-    const matchedTags = [];
+    const exactMatches = [];
+    const exactTags = [];
+    const folderMatches = [];
+    const folderTags = [];
 
     for (const item of state.savedTexts) {
-      const kws = getKeywordsList(item);
-      if (kws.length === 0) continue;
+      const groups = getKeywordGroups(item);
+      if (groups.length === 0) continue;
 
-      const itemMatches = kws.some((kw) => {
-        return fileNames.some((f) => f.norm.includes(kw));
-      });
+      let itemHasExactMatch = false;
+      let itemHasFolderMatch = false;
 
-      if (itemMatches) {
-        const text = typeof item === 'string' ? item : item?.text;
-        const tag = typeof item === 'object' && item?.tag ? item.tag : '';
-        if (text && !matchingTexts.includes(text)) {
-          matchingTexts.push(text);
-          if (tag) matchedTags.push(tag);
+      for (const terms of groups) {
+        // 1. Ocorrência em conjunto no mesmo arquivo (E)
+        const matchedInSameFile = fileNames.some((f) => {
+          return terms.every((term) => matchTermInFileName(f.norm, term));
+        });
+
+        if (matchedInSameFile) {
+          itemHasExactMatch = true;
+          break;
+        }
+
+        // 2. Se houver mais de 1 termo e nenhum arquivo isolado contiver todos,
+        // verifica se os arquivos da pasta em conjunto contemplam todos os termos
+        if (
+          terms.length > 1 &&
+          terms.every((term) => fileNames.some((f) => matchTermInFileName(f.norm, term)))
+        ) {
+          itemHasFolderMatch = true;
+        }
+      }
+
+      const text = typeof item === 'string' ? item : item?.text;
+      const tag = typeof item === 'object' && item?.tag ? item.tag : '';
+
+      if (itemHasExactMatch) {
+        if (text && !exactMatches.includes(text)) {
+          exactMatches.push(text);
+          if (tag) exactTags.push(tag);
+        }
+      } else if (itemHasFolderMatch) {
+        if (text && !folderMatches.includes(text)) {
+          folderMatches.push(text);
+          if (tag) folderTags.push(tag);
         }
       }
     }
+
+    // Se houver matches exatos (no mesmo arquivo), prioriza-os totalmente
+    const matchingTexts = exactMatches.length > 0 ? exactMatches : folderMatches;
+    const matchedTags = exactMatches.length > 0 ? exactTags : folderTags;
 
     if (matchingTexts.length > 0) {
       return {
@@ -1040,8 +1109,44 @@
     }
   }
 
+  /**
+   * Valida se a string representa estritamente um caminho de pasta válido do Windows ou Linux.
+   * Rejeita textos comuns, frases, URLs, tags ou termos copiados (ex: "QIA- =INGLÊS=").
+   */
+  function isValidFolderPath(path) {
+    if (!path || typeof path !== 'string') return false;
+    const clean = path.trim().replace(/^["']|["']$/g, '');
+    if (!clean || clean.includes('\n') || clean.includes('\r') || clean.length > 500) return false;
+
+    // Rejeita URLs (ex: http://, https://)
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(clean)) return false;
+
+    // Windows: Letra de unidade (ex: C:\..., D:/..., C:, C:\)
+    if (/^[a-zA-Z]:([\\/].*)?$/i.test(clean)) return true;
+
+    // Windows: Caminho de rede UNC (ex: \\servidor\pasta ou //servidor/pasta)
+    if (/^(\\\\{2}|\/\/)[^\\/\0]+[\\/].+/i.test(clean)) return true;
+
+    // Linux/Unix: Caminho absoluto iniciando com / (ex: /home/user, /mnt/c/...)
+    if (/^\/[^/\0]+.*$/i.test(clean)) return true;
+
+    // Linux/Unix: Caminho relativo à home (~/ ou ~\)
+    if (/^~[\\/].+/i.test(clean)) return true;
+
+    // Caminho relativo explícito (./ ou ../ ou .\ ou ..\)
+    if (/^\.\.?[\\/].+/i.test(clean)) return true;
+
+    // Caminho com subpastas (requer ao menos uma barra e sem caracteres proibidos de sistema de arquivos)
+    if (/[\\/]/.test(clean)) {
+      if (/[<>:"|?*]/.test(clean)) return false;
+      return true;
+    }
+
+    return false;
+  }
+
   function checkAndUpdateInputForPath(targetPath, force = false) {
-    if (!targetPath) return;
+    if (!targetPath || !isValidFolderPath(targetPath)) return;
     const clean = targetPath.trim().replace(/^["']|["']$/g, '');
     if (!clean || clean.includes('\n') || clean.includes('\r') || clean.length > 500) return;
     if (!force && clean === lastProcessedPathForInput) return;
@@ -3628,18 +3733,19 @@
   }
 
   function extractBatchCode(path) {
-    if (!path) return '';
+    if (!path || !isValidFolderPath(path)) return '';
     const clean = String(path).trim().replace(/^[\\/"']+|[\\/"']+$/g, '');
     const parts = clean.split(/[/\\]/).filter(Boolean);
-    return parts[parts.length - 1] || clean;
+    return parts[parts.length - 1] || '';
   }
 
   function syncNlmDataset() {
     try {
-      const batchCode = extractBatchCode(state.nlmSourcesPath || '');
+      const isPathValid = isValidFolderPath(state.nlmSourcesPath);
+      const batchCode = isPathValid ? extractBatchCode(state.nlmSourcesPath || '') : '';
       if (document.documentElement.dataset) {
         document.documentElement.dataset.ccaNlmBatchCode = batchCode;
-        document.documentElement.dataset.ccaNlmSourcesPath = state.nlmSourcesPath || '';
+        document.documentElement.dataset.ccaNlmSourcesPath = isPathValid ? (state.nlmSourcesPath || '') : '';
         document.documentElement.dataset.ccaAutoUploadFiles = state.autoUploadFiles ? '1' : '0';
         document.documentElement.dataset.ccaNlmCancelled = userCancelledModalUpload ? '1' : '0';
       }
@@ -3651,14 +3757,15 @@
     const addonBtn = rootEl?.querySelector('#cca-add-sources-manual');
     const panelBatchCode = rootEl?.querySelector('#cca-panel-batch-code');
     const targetPath = (path || state.nlmSourcesPath || '').trim();
-    const batchCode = extractBatchCode(targetPath);
+    const isPathValid = isValidFolderPath(targetPath);
+    const batchCode = isPathValid ? extractBatchCode(targetPath) : '';
     syncNlmDataset();
 
     if (panelBatchCode) {
-      panelBatchCode.textContent = batchCode || 'Nenhum';
+      panelBatchCode.textContent = isPathValid ? (batchCode || 'Nenhum') : 'Nenhuma';
     }
 
-    if (highlight && targetPath) {
+    if (highlight && isPathValid) {
       pasteBtn?.classList.add('cca-btn-highlighted');
       addonBtn?.classList.add('cca-btn-highlighted');
       if (pasteBtn) {
@@ -3680,6 +3787,9 @@
       if (pasteBtn) {
         pasteBtn.innerHTML = '📁 Colar da Área de Transf. & Enviar Arquivos';
         pasteBtn.title = 'Lê o caminho copiado na área de transferência e envia como ARQUIVOS no NotebookLM';
+      }
+      if (!isPathValid) {
+        setStatus('Nenhuma pasta identificada.');
       }
     }
   }
@@ -3733,7 +3843,7 @@
   let userCancelledModalUpload = false;
 
   async function autoArmAndHighlightModalUpload(targetPath, force = false) {
-    if (!targetPath || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
+    if (!targetPath || !isValidFolderPath(targetPath) || !isNotebookLM() || !isNotebookLMNotebookPage()) return;
     if (isAutoArming) return;
     // Se o envio automático estiver desabilitado, cancelado pelo usuário no momento ou a pasta já foi enviada, não re-arma sozinho
     if (!force && (userCancelledModalUpload || !state.autoUploadFiles || lastUploadedPath === targetPath)) return;
@@ -3813,29 +3923,31 @@
     try {
       const clipText = (await navigator.clipboard.readText()) || '';
       const clean = clipText.trim().replace(/^["']|["']$/g, '');
-      if (!clean) {
-        if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
+
+      // Se o que está na área de transferência NÃO for uma pasta válida do Windows ou Linux:
+      if (!isValidFolderPath(clean)) {
+        // Se o valor salvo anteriormente no state também não for uma pasta válida, limpa imediatamente
+        if (state.nlmSourcesPath && !isValidFolderPath(state.nlmSourcesPath)) {
+          state.nlmSourcesPath = '';
+          const inputEl = rootEl?.querySelector('#cca-sources-path');
+          if (inputEl) inputEl.value = '';
+          persistUiFields();
+        }
+
+        if (isValidFolderPath(state.nlmSourcesPath)) {
           if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
           const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
           if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !userDismissedModal && !isBridgeArmed && getNotebookLMOpenDialog()) {
             void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
           }
+        } else {
+          highlightSendButton(false);
+          setStatus('Nenhuma pasta identificada.');
         }
         return;
       }
 
-      // Evita capturar textos gigantes multilinhas (ex: prompts ou resumos gerados)
-      if (clean.includes('\n') || clean.includes('\r') || clean.length > 500) {
-        if (state.nlmSourcesPath && (!userDismissedModal || lastUploadedPath !== state.nlmSourcesPath)) {
-          if (!userDismissedModal) highlightSendButton(true, state.nlmSourcesPath);
-          const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
-          if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !userDismissedModal && !isBridgeArmed && getNotebookLMOpenDialog()) {
-            void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
-          }
-        }
-        return;
-      }
-
+      // Aqui, clean É um caminho de pasta válido do Windows ou Linux!
       const inputEl = rootEl?.querySelector('#cca-sources-path');
       if (inputEl && inputEl.value !== clean) {
         inputEl.value = clean;
@@ -3851,7 +3963,7 @@
       if (!userDismissedModal || isNewPath) {
         highlightSendButton(true, clean);
       }
-      dlog('autoCaptureClipboardPath: capturado da área de transferência:', clean);
+      dlog('autoCaptureClipboardPath: pasta válida capturada da área de transferência:', clean);
 
       if (isNewPath) {
         checkAndUpdateInputForPath(clean);
@@ -3864,12 +3976,14 @@
       }
     } catch (e) {
       dlog('autoCaptureClipboardPath: aguardando foco da página:', e);
-      if (state.nlmSourcesPath && isNotebookLM() && !userDismissedModal) {
+      if (isValidFolderPath(state.nlmSourcesPath) && isNotebookLM() && !userDismissedModal) {
         highlightSendButton(true, state.nlmSourcesPath);
         const isBridgeArmed = document.documentElement.dataset?.ccaNlmArmed === '1';
         if (state.autoUploadFiles && isNotebookLMNotebookPage() && !userCancelledModalUpload && !isBridgeArmed && getNotebookLMOpenDialog()) {
           void autoArmAndHighlightModalUpload(state.nlmSourcesPath, true);
         }
+      } else {
+        highlightSendButton(false);
       }
     }
   }
@@ -3886,40 +4000,43 @@
     const inputEl = rootEl?.querySelector('#cca-sources-path');
     const savedPath = (inputEl?.value.trim() || state.nlmSourcesPath || '').trim();
 
-    // Se o texto da área de transferência for longo/multilinhas ou vazio, prefere o caminho já salvo
-    if (clipText && (clipText.includes('\n') || clipText.includes('\r') || clipText.length > 500)) {
-      clipText = savedPath;
+    let path = '';
+    if (isValidFolderPath(clipText)) {
+      path = clipText;
+    } else if (isValidFolderPath(savedPath)) {
+      path = savedPath;
     }
 
-    if (!clipText && savedPath) {
-      clipText = savedPath;
-    }
-
-    if (!clipText) {
-      setStatus('Área de transferência vazia e nenhuma pasta preenchida. Copie o caminho da pasta primeiro.');
+    if (!path) {
+      highlightSendButton(false);
+      setStatus('Nenhuma pasta identificada. Copie o caminho de uma pasta do Windows ou Linux.');
       return;
     }
 
     if (inputEl) {
-      inputEl.value = clipText;
+      inputEl.value = path;
     }
-    state.nlmSourcesPath = clipText;
+    state.nlmSourcesPath = path;
     persistUiFields();
-    checkAndUpdateInputForPath(clipText);
+    checkAndUpdateInputForPath(path);
 
-    await executeAddSources(clipText, mode);
+    await executeAddSources(path, mode);
   }
 
   async function addSourcesFromPathInput(mode = 'file') {
     const inputEl = rootEl?.querySelector('#cca-sources-path');
     let path = (inputEl?.value.trim() || state.nlmSourcesPath || '').trim();
-    if (!path) {
+    if (!isValidFolderPath(path)) {
       try {
-        path = ((await navigator.clipboard.readText()) || '').trim().replace(/^["']|["']$/g, '');
+        const clip = ((await navigator.clipboard.readText()) || '').trim().replace(/^["']|["']$/g, '');
+        if (isValidFolderPath(clip)) {
+          path = clip;
+        }
       } catch (_) {}
     }
-    if (!path || path.includes('\n') || path.includes('\r') || path.length > 500) {
-      setStatus('Digite ou copie o caminho da pasta com as fontes.');
+    if (!isValidFolderPath(path)) {
+      highlightSendButton(false);
+      setStatus('Nenhuma pasta identificada. Digite ou copie o caminho de uma pasta do Windows ou Linux.');
       return;
     }
     if (inputEl) inputEl.value = path;
@@ -3930,6 +4047,11 @@
   }
 
   async function executeAddSources(targetPath, mode = 'file') {
+    if (!targetPath || !isValidFolderPath(targetPath)) {
+      highlightSendButton(false);
+      setStatus('Nenhuma pasta identificada.');
+      return;
+    }
     userDismissedModal = false;
     lastUploadedPath = '';
     highlightSendButton(true, targetPath);
@@ -4076,7 +4198,7 @@
       userDismissedModal = true;
       userCancelledModalUpload = false;
       syncNlmDataset();
-      if (state.nlmSourcesPath) {
+      if (state.nlmSourcesPath && isValidFolderPath(state.nlmSourcesPath)) {
         highlightSendButton(true, state.nlmSourcesPath);
         setStatus(
           `Modal de fontes fechado.<br>` +
@@ -4086,7 +4208,7 @@
         );
       } else {
         highlightSendButton(false);
-        setStatus('Modal de fontes fechado. Clique em <strong>"Enviar Arquivos"</strong> quando desejar adicionar.');
+        setStatus('Modal de fontes fechado. Nenhuma pasta identificada.');
       }
     }
   });
@@ -4452,6 +4574,7 @@
     try {
       chrome.storage.local.set({
         [STORAGE_KEY]: {
+          savedTextsVersion: CURRENT_SAVED_TEXTS_VERSION,
           text: state.text,
           savedTexts: state.savedTexts,
           times: state.times,
@@ -4622,8 +4745,8 @@
         kwInput.type = 'text';
         kwInput.className = 'cca-saved-edit-keywords';
         kwInput.value = keywords;
-        kwInput.placeholder = 'Ex: resumo, mapa, aula (sep. por vírgula)';
-        kwInput.title = 'Palavras que, se encontradas no título dos arquivos da pasta, selecionarão este texto automaticamente';
+        kwInput.placeholder = 'Ex: QIA- INGLÊS, resumo (espaço = e, vírgula = ou)';
+        kwInput.title = 'Termos separados por espaço são verificados em conjunto (E). Separe alternativas por vírgula (OU).';
         kwInput.spellcheck = false;
         kwInput.autocomplete = 'off';
         kwField.append(kwLabel, kwInput);
@@ -5273,7 +5396,7 @@
               </div>
               <div id="cca-save-tag-wrap" class="cca-save-tag-wrap" style="display:none;">
                 <input type="text" id="cca-save-tag" placeholder="Nome da tag (obrigatório)" spellcheck="false" autocomplete="off" />
-                <input type="text" id="cca-save-keywords" placeholder="Palavras nos títulos dos arquivos (ex: resumo, mapa)" spellcheck="false" autocomplete="off" title="Palavras que, se encontradas no título dos arquivos da pasta, selecionarão este texto automaticamente (separe por vírgula)" />
+                <input type="text" id="cca-save-keywords" placeholder="Palavras nos títulos dos arquivos (ex: QIA- INGLÊS, resumo)" spellcheck="false" autocomplete="off" title="Termos separados por espaço são verificados em conjunto (E). Separe alternativas por vírgula (OU)." />
               </div>
             </div>
             <div id="cca-saved-text-list" role="list"></div>
@@ -5804,15 +5927,20 @@
       sourcesPathEl.addEventListener('input', () => {
         const val = sourcesPathEl.value.trim();
         state.nlmSourcesPath = val;
-        if (val) {
+        if (isValidFolderPath(val)) {
           highlightSendButton(true, val);
         } else {
           highlightSendButton(false);
+          if (val) {
+            setStatus('Nenhuma pasta válida do Windows ou Linux identificada.');
+          } else {
+            setStatus('Nenhuma pasta identificada.');
+          }
         }
       });
       sourcesPathEl.addEventListener('change', () => {
         const val = sourcesPathEl.value.trim();
-        if (val) {
+        if (isValidFolderPath(val)) {
           checkAndUpdateInputForPath(val);
         }
       });
@@ -5826,8 +5954,10 @@
     }
 
     if (isNotebookLM()) {
-      if (state.nlmSourcesPath) {
+      if (isValidFolderPath(state.nlmSourcesPath)) {
         highlightSendButton(true, state.nlmSourcesPath);
+      } else {
+        highlightSendButton(false);
       }
       void autoCaptureClipboardPath();
     }
@@ -5839,45 +5969,59 @@
         isSettingsLoaded = true;
         try {
           const s = data?.[STORAGE_KEY] || {};
-          const saved = typeof s.text === 'string' ? s.text : '';
-          // Mantém texto personalizado; migra só o default antigo.
-          if (saved && !LEGACY_DEFAULT_TEXTS.has(saved)) state.text = saved;
-          else state.text = DEFAULTS.text;
-          if (!Array.isArray(s.savedTexts)) {
-            // Instalação limpa / primeira inicialização: usa os padrões
+          const savedTextsVersion = Number(s.savedTextsVersion || 0);
+
+          if (savedTextsVersion < CURRENT_SAVED_TEXTS_VERSION) {
+            // Migra todos os usuários para o novo conjunto de textos padrão
             state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
+            const saved = typeof s.text === 'string' ? s.text : '';
+            if (saved && !LEGACY_DEFAULT_TEXTS.has(saved.toLowerCase()) && saved !== 'Faça a classificação.') {
+              state.text = saved;
+            } else {
+              state.text = DEFAULTS.text;
+            }
             try {
               chrome.storage.local.set({
                 [STORAGE_KEY]: {
                   ...s,
+                  savedTextsVersion: CURRENT_SAVED_TEXTS_VERSION,
                   savedTexts: state.savedTexts,
+                  text: state.text,
                 },
               });
             } catch {
               // ignore
             }
           } else {
-            // O usuário já possui savedTexts no storage (pode ter excluído, editado ou adicionado).
-            // NUNCA reinserir textos padrão que o usuário apagou.
-            const loadedSaved = normalizeSavedTexts(s.savedTexts).filter(
-              (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
-            );
-            state.savedTexts = sortSavedTexts(loadedSaved);
-            const missingKeywords =
-              s.savedTexts.some((it) => typeof it === 'object' && !('keywords' in it));
-            const changed =
-              missingKeywords ||
-              s.savedTexts.length !== state.savedTexts.length;
-            if (changed) {
-              try {
-                chrome.storage.local.set({
-                  [STORAGE_KEY]: {
-                    ...s,
-                    savedTexts: state.savedTexts,
-                  },
-                });
-              } catch {
-                // ignore
+            // Versão atualizada: respeita totalmente adições, edições ou exclusões feitas pelo usuário
+            const saved = typeof s.text === 'string' ? s.text : '';
+            if (saved && !LEGACY_DEFAULT_TEXTS.has(saved.toLowerCase())) state.text = saved;
+            else state.text = DEFAULTS.text;
+
+            if (!Array.isArray(s.savedTexts)) {
+              state.savedTexts = sortSavedTexts(DEFAULT_SAVED_TEXTS.map((item) => ({ ...item })));
+            } else {
+              const loadedSaved = normalizeSavedTexts(s.savedTexts).filter(
+                (item) => !LEGACY_DEFAULT_SAVED_TEXTS.has(item.text)
+              );
+              state.savedTexts = sortSavedTexts(loadedSaved);
+              const missingKeywords =
+                s.savedTexts.some((it) => typeof it === 'object' && !('keywords' in it));
+              const changed =
+                missingKeywords ||
+                s.savedTexts.length !== state.savedTexts.length;
+              if (changed) {
+                try {
+                  chrome.storage.local.set({
+                    [STORAGE_KEY]: {
+                      ...s,
+                      savedTextsVersion: CURRENT_SAVED_TEXTS_VERSION,
+                      savedTexts: state.savedTexts,
+                    },
+                  });
+                } catch {
+                  // ignore
+                }
               }
             }
           }
@@ -5916,7 +6060,9 @@
           state.nlmSourcesSectionOpen =
             typeof s.nlmSourcesSectionOpen === 'boolean' ? s.nlmSourcesSectionOpen : DEFAULTS.nlmSourcesSectionOpen;
           state.nlmSourcesPath =
-            typeof s.nlmSourcesPath === 'string' ? s.nlmSourcesPath : DEFAULTS.nlmSourcesPath;
+            typeof s.nlmSourcesPath === 'string' && isValidFolderPath(s.nlmSourcesPath)
+              ? s.nlmSourcesPath
+              : '';
           state.configSectionOpen =
             typeof s.configSectionOpen === 'boolean'
               ? s.configSectionOpen
@@ -6092,7 +6238,7 @@
   });
 
   window.addEventListener('pointerdown', () => {
-    if (isNotebookLM() && !state.nlmSourcesPath) {
+    if (isNotebookLM() && !isValidFolderPath(state.nlmSourcesPath)) {
       void autoCaptureClipboardPath();
     }
   }, { once: true });
