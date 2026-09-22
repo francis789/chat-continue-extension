@@ -338,6 +338,31 @@ async function resetActionIcon() {
   }).catch(() => {});
 }
 
+let isLinuxPlatformCached = null;
+
+async function isLinuxPlatform() {
+  if (isLinuxPlatformCached !== null) return isLinuxPlatformCached;
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.getPlatformInfo) {
+      const info = await chrome.runtime.getPlatformInfo();
+      if (info?.os) {
+        isLinuxPlatformCached = info.os === 'linux' || info.os === 'openbsd';
+        return isLinuxPlatformCached;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    const plat = (typeof navigator !== 'undefined' && navigator.userAgentData?.platform) || '';
+    isLinuxPlatformCached = /linux|x11/i.test(ua) || /linux/i.test(plat);
+    return isLinuxPlatformCached;
+  } catch (_) {}
+
+  isLinuxPlatformCached = false;
+  return isLinuxPlatformCached;
+}
+
 async function closeProgressHelper() {
   const id = progressHelperWindowId;
   progressHelperWindowId = null;
@@ -356,6 +381,13 @@ async function findProgressHelperTab() {
 }
 
 async function ensureProgressHelper(progress, iconUrl) {
+  if (await isLinuxPlatform()) {
+    if (progressHelperWindowId != null) {
+      await closeProgressHelper();
+    }
+    return null;
+  }
+
   const isAlert = progress?.kind === 'alert';
   const label = isAlert
     ? '!'

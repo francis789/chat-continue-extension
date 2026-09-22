@@ -1,4 +1,13 @@
 (() => {
+  try {
+    const ua = navigator.userAgent || '';
+    const plat = navigator.userAgentData?.platform || '';
+    if (/linux|x11/i.test(ua) || /linux/i.test(plat)) {
+      window.close();
+      return;
+    }
+  } catch (_) {}
+
   const labelEl = document.getElementById('label');
 
   function setFavicons(sourceCanvas) {

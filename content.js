@@ -928,11 +928,25 @@
 
   function matchTermInFileName(fileNorm, term) {
     if (!term || !fileNorm) return false;
-    if (fileNorm.includes(term)) return true;
+    const endsWithHyphen = term.endsWith('-');
+    const baseTerm = endsWithHyphen ? term.slice(0, -1).trim() : term.trim();
+    if (!baseTerm) return false;
+
+    const escaped = escapeRegex(baseTerm).replace(/(?:\\-)|\-/g, '[\\s-_]+');
+    let patternStr;
+    if (endsWithHyphen) {
+      // Para termos com hífen final (ex: "SUM-", "CLS-", "QIA-"):
+      // Exige início de palavra (início da linha ou caractere não alfanumérico)
+      // E após o termo: espaço, hífen, underline, ponto (extensão) ou fim de linha
+      patternStr = '(?:^|[^a-z0-9])' + escaped + '(?:[\\s-_.]+|$)';
+    } else {
+      // Para termos sem hífen final, respeita bordas alfanuméricas caso o termo comece/termine com alfanumérico
+      const startBound = /^[a-z0-9]/i.test(baseTerm) ? '(?:^|[^a-z0-9])' : '';
+      const endBound = /[a-z0-9]$/i.test(baseTerm) ? '(?:[^a-z0-9]|$)' : '';
+      patternStr = startBound + escaped + endBound;
+    }
     try {
-      const escaped = escapeRegex(term);
-      const pattern = escaped.replace(/(?:\\-)|\-/g, '[\\s-_]*');
-      return new RegExp(pattern, 'i').test(fileNorm);
+      return new RegExp(patternStr, 'i').test(fileNorm);
     } catch (_) {
       return false;
     }
@@ -963,18 +977,21 @@
   }
 
   function getGeralSavedText() {
-    if (!Array.isArray(state.savedTexts) || state.savedTexts.length === 0) {
-      return DEFAULTS.text;
+    if (Array.isArray(state.savedTexts) && state.savedTexts.length > 0) {
+      const geralItem = state.savedTexts.find((item) => {
+        const tag = (typeof item === 'object' && item?.tag ? item.tag : '').trim().toLowerCase();
+        return tag === 'geral';
+      });
+      if (geralItem) {
+        const txt = typeof geralItem === 'string' ? geralItem : geralItem.text;
+        if (typeof txt === 'string' && txt.trim()) return txt.trim();
+      }
+      for (const item of state.savedTexts) {
+        const txt = typeof item === 'string' ? item : item?.text;
+        if (typeof txt === 'string' && txt.trim()) return txt.trim();
+      }
     }
-    const geralItem = state.savedTexts.find((item) => {
-      const tag = (typeof item === 'object' && item?.tag ? item.tag : '').trim().toLowerCase();
-      return tag === 'geral';
-    });
-    if (geralItem) {
-      return typeof geralItem === 'string' ? geralItem : geralItem.text;
-    }
-    const first = state.savedTexts[0];
-    return typeof first === 'string' ? first : first?.text || DEFAULTS.text;
+    return DEFAULTS.text || 'Execute o comando.';
   }
 
   /**
@@ -1091,7 +1108,6 @@
   }
 
   function checkAndUpdateInputWithFiles(files, pathOrSource = '', force = false) {
-    if (!Array.isArray(files) || files.length === 0) return;
     const cleanSource = String(pathOrSource || '').trim();
     if (!force && cleanSource && cleanSource === lastProcessedPathForInput) {
       return;
@@ -1100,7 +1116,8 @@
       lastProcessedPathForInput = cleanSource;
     }
 
-    const result = findMatchingSavedText(files);
+    const safeFiles = Array.isArray(files) ? files : [];
+    const result = findMatchingSavedText(safeFiles);
     if (result && result.text) {
       const desc = result.isFallback
         ? `tag Geral (principal, nenhuma palavra localizada)`
@@ -1156,7 +1173,7 @@
 
     try {
       chrome.runtime.sendMessage({ type: 'cca-read-folder-files', path: clean }, (res) => {
-        if (!res?.ok || !Array.isArray(res.files) || res.files.length === 0) {
+        if (!res?.ok || !Array.isArray(res.files)) {
           if (lastProcessedPathForInput === clean) {
             lastProcessedPathForInput = '';
           }
@@ -1176,7 +1193,7 @@
     const names = Array.from(files).map((f) => f.name).sort().join('|');
     if (names && names === lastProcessedFilesSigForInput) return;
     lastProcessedFilesSigForInput = names;
-    checkAndUpdateInputWithFiles(Array.from(files), `arquivos-drag-drop:${names}`);
+    checkAndUpdateInputWithFiles(Array.from(files), `arquivos-drag-drop:${names}`, true);
   }
 
   // ─── Detecção por site ───────────────────────────────────────────
@@ -3964,7 +3981,7 @@
       dlog('autoCaptureClipboardPath: pasta válida capturada da área de transferência:', clean);
 
       if (isNewPath) {
-        checkAndUpdateInputForPath(clean);
+        checkAndUpdateInputForPath(clean, true);
       }
 
       // Só prepara/destaca o botão no modal do NotebookLM se envio automático estiver ativo e o modal de fontes já estiver aberto!
@@ -4016,7 +4033,7 @@
     }
     state.nlmSourcesPath = path;
     persistUiFields();
-    checkAndUpdateInputForPath(path);
+    checkAndUpdateInputForPath(path, true);
 
     await executeAddSources(path, mode);
   }
@@ -4040,7 +4057,7 @@
     if (inputEl) inputEl.value = path;
     state.nlmSourcesPath = path;
     persistUiFields();
-    checkAndUpdateInputForPath(path);
+    checkAndUpdateInputForPath(path, true);
     await executeAddSources(path, mode);
   }
 
@@ -4134,6 +4151,9 @@
       highlightSendButton(false);
       const names = (ev.data.fileNames || []).slice(0, 3).join(', ') + ((ev.data.fileNames?.length || 0) > 3 ? '…' : '');
       setStatus(`✓ <strong>${ev.data.count}</strong> fonte(s) enviada(s) ao NotebookLM (upload de arquivos)!<br>[${names}]`);
+      if (Array.isArray(ev.data.fileNames) && ev.data.fileNames.length > 0) {
+        checkAndUpdateInputWithFiles(ev.data.fileNames, 'nlm-upload-confirmed', true);
+      }
     }
 
     if (ev.data?.type === 'CCA_NLM_AUTO_UPLOAD_CANCELLED') {
@@ -5927,6 +5947,7 @@
         state.nlmSourcesPath = val;
         if (isValidFolderPath(val)) {
           highlightSendButton(true, val);
+          checkAndUpdateInputForPath(val, true);
         } else {
           highlightSendButton(false);
           if (val) {
@@ -5939,7 +5960,7 @@
       sourcesPathEl.addEventListener('change', () => {
         const val = sourcesPathEl.value.trim();
         if (isValidFolderPath(val)) {
-          checkAndUpdateInputForPath(val);
+          checkAndUpdateInputForPath(val, true);
         }
       });
     }
@@ -5954,6 +5975,7 @@
     if (isNotebookLM()) {
       if (isValidFolderPath(state.nlmSourcesPath)) {
         highlightSendButton(true, state.nlmSourcesPath);
+        checkAndUpdateInputForPath(state.nlmSourcesPath, true);
       } else {
         highlightSendButton(false);
       }

@@ -350,12 +350,42 @@
           console.log('[CCA-Bridge] Suprimindo showOpenFilePicker nativo após injeção automática recente.');
           return [];
         }
-        return origPicker.apply(this, arguments);
+        const res = await origPicker.apply(this, arguments);
+        if (Array.isArray(res) && res.length > 0) {
+          const names = res.map((h) => h?.name).filter(Boolean);
+          if (names.length > 0) {
+            window.postMessage(
+              {
+                type: 'CCA_NLM_UPLOAD_CONFIRMED',
+                count: names.length,
+                fileNames: names,
+                manualPicker: true
+              },
+              '*'
+            );
+          }
+        }
+        return res;
       };
     }
   }
 
   installNativeHooks();
+
+  document.addEventListener('change', (e) => {
+    try {
+      if (Date.now() - __justInjectedTimestamp < 2000) return;
+      if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file' && e.target.files && e.target.files.length > 0) {
+        const names = Array.from(e.target.files).map((f) => f.name);
+        window.postMessage({
+          type: 'CCA_NLM_UPLOAD_CONFIRMED',
+          count: names.length,
+          fileNames: names,
+          manualInput: true
+        }, '*');
+      }
+    } catch (_) {}
+  }, true);
 
   function armInterceptor(webFiles, batchInfo = {}) {
     __armedFiles = webFiles;
